@@ -28,6 +28,17 @@ ADDON_BL_IDNAME     = "bl_ext.user_default.dayz_geometry_maker"
 
 CURRENT_VERSION     = (2, 1, 0)  # keep in sync with bl_info in __init__.py
 
+# Files that live in the repo but not in the local addon folder - skip these
+REPO_ONLY_FILES = {
+    ".gitignore",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "scripts/install_dev.bat",
+    "scripts/install_dev.sh",
+}
+
 # ---------------------------------------------------------------------------
 # Shared state  (written from background threads, read on main thread)
 # ---------------------------------------------------------------------------
@@ -72,7 +83,7 @@ def _local_sha(filepath):
         return None
     with open(filepath, "rb") as f:
         content = f.read()
-    header  = "blob {}\0".format(len(content)).encode()
+    header = "blob {}\0".format(len(content)).encode()
     return hashlib.sha1(header + content).hexdigest()
 
 
@@ -87,7 +98,7 @@ def _redraw_prefs():
 
 
 # ---------------------------------------------------------------------------
-# Release update check  (main branch — background thread + poll timer)
+# Release update check  (main branch - background thread + poll timer)
 # ---------------------------------------------------------------------------
 
 def _release_check_thread():
@@ -138,10 +149,10 @@ def check_for_update():
 def _do_install_release(operator):
     import zipfile, shutil, tempfile
     if not _latest_download_url:
-        operator.report({'ERROR'}, "No download URL — run Check for Updates first.")
+        operator.report({'ERROR'}, "No download URL - run Check for Updates first.")
         return {'CANCELLED'}
     try:
-        tmp_zip   = tempfile.mktemp(suffix=".zip")
+        tmp_zip = tempfile.mktemp(suffix=".zip")
         req = urllib.request.Request(
             _latest_download_url,
             headers={"User-Agent": "DayZ-Geometry-Maker-Updater"},
@@ -174,13 +185,14 @@ def _do_install_release(operator):
 
 
 # ---------------------------------------------------------------------------
-# Dev branch — file-level SHA diff + pull
+# Dev branch - file-level SHA diff + pull
 # ---------------------------------------------------------------------------
 
 def _dev_check_thread():
     """
     Fetch the full file tree from the dev branch, compare each blob SHA
     against the local file SHA, and store changed/new files in _dev_changed_files.
+    Skips repo-only files that do not belong in the local addon folder.
     """
     global _dev_changed_files, _dev_check_done, _dev_check_running
     try:
@@ -192,7 +204,9 @@ def _dev_check_thread():
         for item in tree:
             if item.get("type") != "blob":
                 continue
-            path       = item["path"]
+            path = item["path"]
+            if path in REPO_ONLY_FILES:
+                continue
             remote_sha = item.get("sha", "")
             local_path = os.path.join(ADDON_DIR, path)
             local_sha  = _local_sha(local_path)
@@ -256,8 +270,8 @@ def _do_dev_pull(operator):
 # ---------------------------------------------------------------------------
 
 class DGM_OT_check_update(bpy.types.Operator):
-    bl_idname     = "dgm.check_update"
-    bl_label      = "Check for Updates"
+    bl_idname      = "dgm.check_update"
+    bl_label       = "Check for Updates"
     bl_description = "Check GitHub Releases for a newer version"
 
     def execute(self, context):
@@ -267,8 +281,8 @@ class DGM_OT_check_update(bpy.types.Operator):
 
 
 class DGM_OT_install_update(bpy.types.Operator):
-    bl_idname     = "dgm.install_update"
-    bl_label      = "Install Update"
+    bl_idname      = "dgm.install_update"
+    bl_label       = "Install Update"
     bl_description = "Download and install the latest release from GitHub"
 
     def execute(self, context):
@@ -276,8 +290,8 @@ class DGM_OT_install_update(bpy.types.Operator):
 
 
 class DGM_OT_dev_check(bpy.types.Operator):
-    bl_idname     = "dgm.dev_check"
-    bl_label      = "Check dev branch for changes"
+    bl_idname      = "dgm.dev_check"
+    bl_label       = "Check dev branch for changes"
     bl_description = "Compare local addon files against the dev branch on GitHub"
 
     def execute(self, context):
@@ -287,8 +301,8 @@ class DGM_OT_dev_check(bpy.types.Operator):
 
 
 class DGM_OT_dev_pull(bpy.types.Operator):
-    bl_idname     = "dgm.dev_pull"
-    bl_label      = "Pull Changes from dev"
+    bl_idname      = "dgm.dev_pull"
+    bl_label       = "Pull Changes from dev"
     bl_description = "Download all changed files from the dev branch and overwrite local copies. Restart Blender after."
 
     def execute(self, context):
@@ -368,4 +382,24 @@ class DGMAddonPreferences(bpy.types.AddonPreferences):
                         col.label(text=path, icon='DOT')
                     box.operator("dgm.dev_pull", text="Pull All Changes", icon='IMPORT')
                 else:
-                    box.label(text="Already up to date wi
+                    box.label(text="Already up to date with dev.", icon='CHECKMARK')
+                box.operator("dgm.dev_check", text="Re-check", icon='FILE_REFRESH')
+            else:
+                box.operator("dgm.dev_check", text="Check for Changes", icon='FILE_REFRESH')
+
+
+# ---------------------------------------------------------------------------
+# Register
+# ---------------------------------------------------------------------------
+
+def register():
+    bpy.utils.register_class(DGMAddonPreferences)
+    for cls in updater_classes:
+        bpy.utils.register_class(cls)
+    check_for_update()
+
+
+def unregister():
+    for cls in reversed(updater_classes):
+        bpy.utils.unregister_class(cls)
+    bpy.utils.unregister_class(DGMAddonPreferences)
