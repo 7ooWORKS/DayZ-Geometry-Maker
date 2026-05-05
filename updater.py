@@ -24,6 +24,12 @@ GITHUB_API_RELEASE  = "https://api.github.com/repos/Phlanka/DayZ-Geometry-Maker/
 GITHUB_TREE         = "https://api.github.com/repos/Phlanka/DayZ-Geometry-Maker/git/trees/{branch}?recursive=1"
 GITHUB_RAW          = "https://raw.githubusercontent.com/Phlanka/DayZ-Geometry-Maker/{branch}/{path}"
 ADDON_DIR           = os.path.dirname(os.path.abspath(__file__))
+# Safety check: if updater.py ended up directly in user_default/ (bad install),
+# correct the path to the actual addon subfolder
+if os.path.basename(ADDON_DIR) not in ("dayz_geometry_maker",):
+    _candidate = os.path.join(ADDON_DIR, "dayz_geometry_maker")
+    if os.path.isdir(_candidate):
+        ADDON_DIR = _candidate
 ADDON_BL_IDNAME     = "bl_ext.user_default.dayz_geometry_maker"
 
 CURRENT_VERSION     = (2, 1, 1)  # keep in sync with bl_info in __init__.py
@@ -391,12 +397,4 @@ class DGMAddonPreferences(bpy.types.AddonPreferences):
                     box.separator()
                     box.label(text="Latest release notes:", icon='TEXT')
                     col = box.column(align=True)
-                    for line in _latest_changelog.splitlines():
-                        line = line.strip()
-                        if line:
-                            col.label(text=line[:80])
-                box.operator("dgm.check_update", text="Re-check", icon='FILE_REFRESH')
-
-            else:
-                # Not yet checked (or check in progress)
-                b
+                    for line in _latest_changelog.spl
