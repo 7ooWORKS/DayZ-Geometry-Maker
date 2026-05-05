@@ -1,37 +1,37 @@
 # Changelog
 
-## [2.0.8] - 2026-05-04
-
-### Added
-- **HouseNoDestruct config template** — Export section now has a Config Template dropdown. Choose between `Container Base`, `House (Static Obj)` (inherits `HouseNoDestruct`), or `None`. Only one can be selected at a time. The house template includes a full `DamageSystem` with projectile/melee set to zero damage (indestructible static object)
-- **Auto-generated `class Doors {}` block** — When doors are configured in the panel, the container `config.cpp` now includes a `class Doors {}` entry per door with `component`, `soundPos`, `animPeriod`, and default sound sets. Component name matches the door vertex group name
-- **Auto-generated `DamageZones` per door** — Container `config.cpp` now includes a `class DamageZones` block inside `DamageSystem` with one entry per configured door, using `componentNames[]` matching the door vertex group name
-- **Add Door Geometry now creates all three geometry LODs** — Fire Geometry and View Geometry door meshes are created alongside the Geometry LOD mesh. Each carries only the door vertex group name as its named selection (no `ComponentXX`) — the named selection is what DayZ uses to animate collision with the door
-- **Preferences panel** — Addon now has a proper preferences panel (Edit > Preferences > Add-ons > DayZ Geometry Maker) with release update check and Early Access section
-- **Early Access mode** — Toggle in preferences. When enabled, a Check for Changes button checks the live GitHub main branch for source files changed since your last pull. Shows a list of changed files and a Download button that overwrites local copies and prompts a Blender restart
-
-### Changed
-- **Fire Geometry** now skips door geometry objects when copying from the Geometry collection — door geometry is handled separately by Add Door Geometry
-- **View Geometry** now copies `ComponentXX` objects from the Geometry collection instead of creating a single bounding box over the whole model. Falls back to bounding box only if no geometry components exist yet
-
-### Fixed
-- **Update banner showing incorrectly** — Version numbers were out of sync across `bl_info`, `blender_manifest.toml`, and `updater.py`, causing the update banner to always appear. All version references are now consistent
+## [Unreleased]
 
 ---
 
-## [2.0.5] - 2026-05-02
+## [2.0.6] - 2026-05-01
 
 ### Added
-- **Mod export system** — Export section now has P3D path picker, Textures folder, and Scripts folder. All config and script files are generated automatically on export
-- **config.cpp generation** — Exports a combined config next to the P3D containing CfgPatches, CfgMods (with correct script paths), and CfgVehicles (Container_Base)
-- **4_World scripts generation** — Entity class, ActionOpen, ActionClose, and moddedActionConstructor scripts generated from templates with class name substitution
-- **model.cfg sections** — Door bone names (leftdoor, rightdoor etc.) now included in `sections[]` alongside texture selections
-- **Add Door Geometry** — New button in the Memory Points door section creates a Geometry LOD convex hull for each configured door vertex group (10kg, named after the door)
-- **Fire Geometry** now includes door geometry objects alongside ComponentXX objects when building from the Geometry collection
-- **Door angle inversion** — model.cfg angle0/angle1 values are negated to match DayZ's sign convention
+- **Memory LOD — individual Add/Update buttons** — each memory point type (bounding box, inventory camera, center, radius, muzzle, bolt axis, case eject, eye/ADS, trigger, magazine, ladder, lights, damage hide, door axis) now has its own Add/Update button instead of a single "Create Selected Points" checkbox list. Points already present in the Memory LOD show a filled dot icon; missing points show hollow. Clicking Add creates the point; clicking Update removes and recreates it at the current target object's position.
+- **Move memory points in the viewport** — each existing memory point has a cursor-icon Move button. Clicking it selects that vertex group in Edit Mode on the Memory LOD and activates the Move tool so you can reposition it freely. Click the button again or press Tab to return to Object Mode.
+- **Door rotation setup panel** — once door axis points (`door_N_axis_1` / `door_N_axis_2`) exist in the Memory LOD, a Rotation Setup box appears per door. Pick the door's vertex group on the target mesh, click Enter Rotate Mode, and a temporary wireframe preview of the door geometry appears in the viewport rotating around the hinge axis. Click Set Closed and Set Open to record the angles, then Done to confirm. The recorded angles are written directly into the model.cfg on export.
+- **Remove Named Property button** — each entry in the Object Properties Named Properties list now has an X button to delete it individually.
 
-### Contributors
-- [7ooWORKS](https://github.com/7ooWORKS) — contributed to the mod export and config generation system
+### Changed
+- **Memory LOD panel redesigned** — the flat checkbox list is replaced with grouped sections (Inventory & Bounds, Weapon Points, Building & Structure, Effects & Lighting), each showing per-point status and move controls.
+- **model.cfg door axis format** — door animation entries now emit `axis = "<bone>_axis_1","<bone>_axis_2";` referencing both axis vertex groups, and use the recorded closed/open angles from the door rotation setup instead of hardcoded 0 / 3.14159.
+- **Door axis vgroup names** — on export, Memory LOD axis vertex groups are renamed from the internal `door_N_axis_1/2` names to `<doorvgroup>_axis_1/2` (e.g. `leftdoor_axis_1`, `leftdoor_axis_2`) so they match the door's named selection in Object Builder.
+
+### Removed
+- **"Create Selected Memory Points" operator** — replaced by the individual per-point Add/Update buttons described above.
+- Old boolean scene properties for memory point toggles (`dgm_memory_bbox`, `dgm_memory_invview`, `dgm_memory_bullet`, etc.) — no longer needed.
+
+---
+
+## [2.0.5] - 2026-04-30
+
+### Added
+- **No Texture** toggle on each named selection — marks a selection as geometry-only or shared-UV with no texture. Hides texture/RVMAT fields, excludes it from baking, and prevents it being stamped with predicted paths on export.
+
+### Fixed
+- Named selection sync now always pre-fills the hidden selection name from the vertex group name, including on existing entries that previously had a blank name.
+- `Add Geometry` no longer crashes with "context is incorrect" when called from the dialog — scale is now applied directly to the mesh data instead of via `bpy.ops.object.transform_apply`.
+- Per-selection baking now correctly respects the `bake_texture` toggle — selections without it ticked are skipped entirely rather than being baked as part of the whole mesh.
 
 ---
 
