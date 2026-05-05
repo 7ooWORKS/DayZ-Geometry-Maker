@@ -26,7 +26,7 @@ GITHUB_RAW          = "https://raw.githubusercontent.com/Phlanka/DayZ-Geometry-M
 ADDON_DIR           = os.path.dirname(os.path.abspath(__file__))
 ADDON_BL_IDNAME     = "bl_ext.user_default.dayz_geometry_maker"
 
-CURRENT_VERSION     = (2, 1, 0)  # keep in sync with bl_info in __init__.py
+CURRENT_VERSION     = (2, 1, 1)  # keep in sync with bl_info in __init__.py
 
 # Files that live in the repo but not in the local addon folder - skip these
 REPO_ONLY_FILES = {
