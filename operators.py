@@ -1421,8 +1421,10 @@ class DGM_PT_main_panel(bpy.types.Panel):
         layout.separator()
 
         # ---- Export ----
-        box, is_open = _section_header("dgm_show_export", "Export")
-        if is_open:
+        box = layout.box()
+        icon = 'TRIA_DOWN' if scene.dgm_show_export else 'TRIA_RIGHT'
+        box.prop(scene, "dgm_show_export", text="Export", icon=icon, emboss=False)
+        if scene.dgm_show_export:
             col = box.column(align=True)
 
             # P3D path — text field + folder picker button
@@ -1542,8 +1544,4 @@ def unregister_scene_props():
         "dgm_memory_doors_count", "dgm_memory_lights_count",
         "dgm_moving_memory_point",
         "dgm_door_pose_active", "dgm_door_pose_active_idx",
-        "dgm_p3d_path", "dgm_textures_path", "dgm_scripts_path", "dgm_export_container_base",
-    ]
-    for _di in range(1, 9):
-        props += [
-            'dgm_door_{}_vgroup'.format(
+        "dgm_p3d_path", "dgm_textures_path", "dgm_scripts_pat
