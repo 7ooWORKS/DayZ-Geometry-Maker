@@ -45,8 +45,10 @@ REPO_ONLY_FILES = {
 
 # -- Release (main branch) state --
 _update_available    = False
+_release_check_done  = False
 _latest_version_str  = ""
 _latest_download_url = ""
+_latest_changelog    = ""   # body text from the GitHub release
 
 # -- Dev branch state --
 _dev_check_running   = False
@@ -102,15 +104,16 @@ def _redraw_prefs():
 # ---------------------------------------------------------------------------
 
 def _release_check_thread():
-    global _update_available, _latest_version_str, _latest_download_url
+    global _update_available, _release_check_done, _latest_version_str, _latest_download_url, _latest_changelog
     try:
         data = _request(GITHUB_API_RELEASE)
         tag  = data.get("tag_name", "")
         remote = _parse_version(tag)
         print("[DGM] Release check: local={} remote={} tag={}".format(CURRENT_VERSION, remote, tag))
+        _latest_version_str = tag
+        _latest_changelog   = data.get("body", "").strip()
         if remote > CURRENT_VERSION:
-            _update_available   = True
-            _latest_version_str = tag
+            _update_available = True
             for asset in data.get("assets", []):
                 if asset.get("name", "").endswith(".zip"):
                     _latest_download_url = asset["browser_download_url"]
@@ -119,6 +122,9 @@ def _release_check_thread():
                 _latest_download_url = data.get("zipball_url", "")
     except Exception as e:
         print("[DGM] Release check failed:", e)
+    finally:
+        _release_check_done = True
+        _redraw_prefs()
 
 
 def _poll_for_update():
@@ -136,7 +142,9 @@ def _poll_for_update():
 
 
 def check_for_update():
+    global _release_check_done
     _poll_for_update._count = 0
+    _release_check_done = False
     t = threading.Thread(target=_release_check_thread, daemon=True)
     t.start()
     bpy.app.timers.register(_poll_for_update, first_interval=1.0)
@@ -357,49 +365,38 @@ class DGMAddonPreferences(bpy.types.AddonPreferences):
             # ---- main: release update ----
             box = layout.box()
             box.label(text="Release Updates", icon='URL')
+
             if _update_available:
+                # Newer version available
                 row = box.row(align=True)
-                row.label(text="Version {} available!".format(_latest_version_str), icon='INFO')
-                row.operator("dgm.install_update", text="Install", icon='IMPORT')
-            else:
-                box.operator("dgm.check_update", text="Check for Release Update", icon='FILE_REFRESH')
-
-        else:
-            # ---- dev: file-level diff + pull ----
-            box = layout.box()
-            box.label(text="Dev Branch Updates", icon='CONSOLE')
-
-            if _dev_check_running:
-                box.label(text="Checking dev branch...", icon='SORTTIME')
-            elif _dev_check_done:
-                if _dev_changed_files:
-                    box.label(
-                        text="{} file(s) differ from dev:".format(len(_dev_changed_files)),
-                        icon='FILE_REFRESH',
-                    )
+                row.label(text="Update available: {}".format(_latest_version_str), icon='INFO')
+                row.operator("dgm.install_update", text="Install Now", icon='IMPORT')
+                if _latest_changelog:
+                    box.separator()
+                    box.label(text="What's new:", icon='TEXT')
                     col = box.column(align=True)
-                    for path in _dev_changed_files:
-                        col.label(text=path, icon='DOT')
-                    box.operator("dgm.dev_pull", text="Pull All Changes", icon='IMPORT')
-                else:
-                    box.label(text="Already up to date with dev.", icon='CHECKMARK')
-                box.operator("dgm.dev_check", text="Re-check", icon='FILE_REFRESH')
+                    for line in _latest_changelog.splitlines():
+                        line = line.strip()
+                        if line:
+                            col.label(text=line[:80])  # cap width for panel
+                box.operator("dgm.check_update", text="Re-check", icon='FILE_REFRESH')
+
+            elif _release_check_done:
+                # Check complete, already up to date
+                box.label(
+                    text="You are up to date  (v{}.{}.{})".format(*CURRENT_VERSION),
+                    icon='CHECKMARK',
+                )
+                if _latest_changelog:
+                    box.separator()
+                    box.label(text="Latest release notes:", icon='TEXT')
+                    col = box.column(align=True)
+                    for line in _latest_changelog.splitlines():
+                        line = line.strip()
+                        if line:
+                            col.label(text=line[:80])
+                box.operator("dgm.check_update", text="Re-check", icon='FILE_REFRESH')
+
             else:
-                box.operator("dgm.dev_check", text="Check for Changes", icon='FILE_REFRESH')
-
-
-# ---------------------------------------------------------------------------
-# Register
-# ---------------------------------------------------------------------------
-
-def register():
-    bpy.utils.register_class(DGMAddonPreferences)
-    for cls in updater_classes:
-        bpy.utils.register_class(cls)
-    check_for_update()
-
-
-def unregister():
-    for cls in reversed(updater_classes):
-        bpy.utils.unregister_class(cls)
-    bpy.utils.unregister_class(DGMAddonPreferences)
+                # Not yet checked (or check in progress)
+                b
