@@ -2,7 +2,7 @@
 
 A free, open-source Blender 5.0 extension for creating and exporting DayZ / Arma P3D models — no ArmaToolbox required.
 
-Built and maintained by [Phlanka](https://phlanka.com), with contributions.
+Built and maintained by [Phlanka](https://phlanka.com).
 
 ---
 
@@ -68,6 +68,15 @@ If you have the Phlanka Texture Baker addon installed and licensed:
 
 ---
 
+## Support
+
+Maintaining and improving this project takes time.  
+If it's helped you, you can support its development here:
+
+[![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/PhlankaGB)
+
+---
+
 ## License
 
 This project is licensed under the **GNU General Public License v3.0** with additional terms:
@@ -81,17 +90,8 @@ This project is licensed under the **GNU General Public License v3.0** with addi
 
 ## Contributing
 
-Pull requests are welcome. Please keep changes focused and open source.
+Pull requests are welcome! All contributions go through the `dev` branch — please read [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide, including:
 
-For bug reports and feature requests, open an issue on GitHub.
-
----
-
-## Credits
-
-- Export pipeline informed by [Arma3ObjectBuilder](https://github.com/MrClock8163/Arma3ObjectBuilder) (GPL-3.0) by MrClock8163
-- Built for the DayZ modding community
-
-## Contributors
-
-- [7ooWORKS](https://github.com/7ooWORKS) — mod export system and config generation
+- How to set up a live dev environment using a symlink (no reinstalling needed)
+- The branch workflow (`dev` → feature branch → PR)
+- Code style and commit conv
