@@ -1118,13 +1118,6 @@ class DGM_PT_main_panel(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
 
-        # Update notification banner
-        if updater._update_available:
-            box = layout.box()
-            row = box.row()
-            row.label(text="Update: " + updater._latest_version_str, icon='INFO')
-            row.operator("dgm.install_update", text="Install", icon='IMPORT')
-
         layout.prop(scene, "dgm_target_object", text="Target Object")
 
         target = scene.dgm_target_object
@@ -1601,3 +1594,4 @@ def unregister():
     unregister_scene_props()
     for cls in reversed(operator_classes):
         bpy.utils.unregister_class(cls)
+                                                                                                                                                                                                                                                                                                       
