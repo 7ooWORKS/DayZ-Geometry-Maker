@@ -300,53 +300,25 @@ def create_geometry(mass=100.0):
 def create_view_geometry():
     """
     View Geometry: defines object visibility for AI and players.
-    Copies the ComponentXX geometry components (skipping door pieces) so it
-    matches the actual collision shape. Falls back to a bounding box if no
-    geometry components exist yet.
+    Wiki: if absent, Geometry LOD is used instead. Can be a bounding box.
     """
-    geo_components = [o for o in _get_geometry_components()
-                      if not o.name.startswith("Geometry_door_")]
+    original_obj = bpy.context.scene.dgm_target_object
+    if not original_obj or original_obj.type != 'MESH':
+        return None
 
-    if geo_components:
-        copies = []
-        for src in geo_components:
-            tmp = src.copy()
-            tmp.data = src.data.copy()
-            bpy.context.scene.collection.objects.link(tmp)
-            bpy.context.view_layer.objects.active = tmp
-            tmp.select_set(True)
-            bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-            copies.append(tmp)
+    min_x, max_x, min_y, max_y, min_z, max_z = get_bbox(original_obj)
+    cx = (max_x + min_x) / 2
+    cy = (max_y + min_y) / 2
+    cz = (max_z + min_z) / 2
 
-        bpy.ops.object.select_all(action='DESELECT')
-        for c in copies:
-            c.select_set(True)
-        bpy.context.view_layer.objects.active = copies[0]
-        if len(copies) > 1:
-            bpy.ops.object.join()
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(cx, cy, cz))
+    obj = bpy.context.object
+    obj.name = "View Geometry"
+    obj.scale = (max_x - min_x, max_y - min_y, max_z - min_z)
+    bpy.ops.object.transform_apply(scale=True)
 
-        obj = bpy.context.active_object
-        obj.name = "View Geometry"
-        renumber_components(obj)
-
-    else:
-        original_obj = bpy.context.scene.dgm_target_object
-        if not original_obj or original_obj.type != 'MESH':
-            return None
-
-        min_x, max_x, min_y, max_y, min_z, max_z = get_bbox(original_obj)
-        cx = (max_x + min_x) / 2
-        cy = (max_y + min_y) / 2
-        cz = (max_z + min_z) / 2
-
-        bpy.ops.mesh.primitive_cube_add(size=1, location=(cx, cy, cz))
-        obj = bpy.context.object
-        obj.name = "View Geometry"
-        obj.scale = (max_x - min_x, max_y - min_y, max_z - min_z)
-        bpy.ops.object.transform_apply(scale=True)
-
-        vg = obj.vertex_groups.new(name="Component01")
-        vg.add([v.index for v in obj.data.vertices], 1.0, 'REPLACE')
+    vg = obj.vertex_groups.new(name="Component01")
+    vg.add([v.index for v in obj.data.vertices], 1.0, 'REPLACE')
 
     set_dgm_props(obj, LOD_VALUES["View Geometry"])
     assign_default_material(obj)
@@ -359,11 +331,11 @@ def create_view_geometry():
 # ---------------------------------------------------------------------------
 
 def _get_geometry_components():
-    """Return all mesh objects from the Geometry collection."""
+    """Return all Geometry_ComponentXX objects from the Geometry collection."""
     col = bpy.data.collections.get("Geometry")
     if not col:
         return []
-    return [o for o in col.objects if o.type == 'MESH']
+    return [o for o in col.objects if o.type == 'MESH' and o.name.startswith("Geometry_Component")]
 
 
 def create_fire_geometry(operator=None, quality=2):
@@ -377,8 +349,7 @@ def create_fire_geometry(operator=None, quality=2):
     """
     ensure_object_mode()
 
-    geo_components = [o for o in _get_geometry_components()
-                      if not o.name.startswith("Geometry_door_")]
+    geo_components = _get_geometry_components()
 
     if geo_components:
         # Duplicate each geometry component box as a fire geometry component
@@ -485,98 +456,6 @@ def create_shadow_volumes():
         assign_default_material(sv_obj)
 
         bpy.ops.object.select_all(action='DESELECT')
-
-
-# ---------------------------------------------------------------------------
-# Door Geometry LOD
-# ---------------------------------------------------------------------------
-
-def create_door_geometry():
-    """
-    Create Geometry, Fire Geometry, and View Geometry LOD meshes for each
-    configured door. Each mesh is a convex hull of the door vertex group and
-    carries only the vgroup name as its named selection — no ComponentXX.
-    The named selection is what DayZ uses to animate collision with the door.
-    Existing door geometry objects are removed and recreated fresh each call.
-    """
-    scene = bpy.context.scene
-    target = scene.dgm_target_object
-    if not target or target.type != 'MESH':
-        return 0
-
-    door_count = getattr(scene, 'dgm_memory_doors_count', 0)
-    created = 0
-
-    # (object_name_prefix, lod_key, collection_name, named_props)
-    LOD_SPECS = [
-        ("Geometry_door_{}",      "Geometry",      "Geometry",      [("autocenter","0"),("canbeoccluded","1"),("canocclude","0")]),
-        ("FireGeometry_door_{}",  "Fire Geometry", "Fire Geometry", []),
-        ("ViewGeometry_door_{}",  "View Geometry", "View Geometry", []),
-    ]
-
-    for di in range(1, door_count + 1):
-        vgroup_name = getattr(scene, 'dgm_door_{}_vgroup'.format(di), "").strip()
-        if not vgroup_name:
-            continue
-
-        vg = target.vertex_groups.get(vgroup_name)
-        if not vg:
-            continue
-
-        # Collect world-space positions of verts in this group
-        wm = target.matrix_world
-        world_verts = []
-        for v in target.data.vertices:
-            for g in v.groups:
-                if g.group == vg.index:
-                    world_verts.append(wm @ v.co.copy())
-                    break
-
-        if len(world_verts) < 4:
-            continue
-
-        # Build convex hull once, reuse mesh data for all three LODs
-        hull_bm = bmesh.new()
-        for co in world_verts:
-            hull_bm.verts.new(co)
-        hull_bm.verts.ensure_lookup_table()
-        result = bmesh.ops.convex_hull(hull_bm, input=hull_bm.verts)
-        for geom in result.get("geom_interior", []):
-            if isinstance(geom, bmesh.types.BMVert):
-                hull_bm.verts.remove(geom)
-
-        for name_tmpl, lod_key, col_name, named_props in LOD_SPECS:
-            obj_name = name_tmpl.format(vgroup_name)
-
-            existing = bpy.data.objects.get(obj_name)
-            if existing:
-                bpy.data.objects.remove(existing, do_unlink=True)
-
-            hull_mesh = bpy.data.meshes.new(obj_name)
-            hull_bm.to_mesh(hull_mesh)
-
-            obj = bpy.data.objects.new(obj_name, hull_mesh)
-            bpy.context.scene.collection.objects.link(obj)
-
-            # Only the vgroup name — no ComponentXX needed for door pieces
-            door_vg = obj.vertex_groups.new(name=vgroup_name)
-            door_vg.add([v.index for v in obj.data.vertices], 1.0, 'REPLACE')
-
-            mass = 10.0
-            add_fhq_weights(obj, weight=mass / max(len(obj.data.vertices), 1))
-
-            set_dgm_props(obj, LOD_VALUES[lod_key], mass=mass)
-            clear_named_props(obj)
-            for prop_name, prop_val in named_props:
-                add_named_prop(obj, prop_name, prop_val)
-
-            assign_default_material(obj)
-            move_to_collection(obj, col_name)
-
-        hull_bm.free()
-        created += 1
-
-    return created
 
 
 # ---------------------------------------------------------------------------
