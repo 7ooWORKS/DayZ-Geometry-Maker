@@ -1,10 +1,17 @@
 """
-DayZ Geometry Maker - GitHub Auto-Updater
-Checks https://github.com/Phlanka/DayZ-Geometry-Maker for a newer release tag
-on Blender startup and notifies the user if one is available.
+DayZ Geometry Maker - Updater
 
-Also supports Early Access mode: checks the live main branch for source file
-changes since the last pull and lets the user download them individually.
+Two modes, switchable in Edit > Preferences > Add-ons > DayZ Geometry Maker:
+
+  main branch (default)
+    Checks GitHub Releases for a newer tagged version on startup.
+    One-click install downloads and installs the release zip.
+
+  dev branch
+    No release tags — instead compares every file in the remote dev branch
+    against your local copy by SHA. Shows which files differ and lets you
+    pull them all down with one click, overwriting local files.
+    Restart Blender after pulling to load the changes.
 """
 
 import bpy
@@ -13,24 +20,27 @@ import json
 import threading
 import os
 
-GITHUB_API        = "https://api.github.com/repos/Phlanka/DayZ-Geometry-Maker/releases/latest"
-GITHUB_COMMITS    = "https://api.github.com/repos/Phlanka/DayZ-Geometry-Maker/commits"
-GITHUB_RAW        = "https://raw.githubusercontent.com/Phlanka/DayZ-Geometry-Maker/main/{}"
-ADDON_DIR         = os.path.dirname(os.path.abspath(__file__))
-BETA_TIMESTAMP_FILE = os.path.join(ADDON_DIR, "beta_last_check.json")
+GITHUB_API_RELEASE  = "https://api.github.com/repos/Phlanka/DayZ-Geometry-Maker/releases/latest"
+GITHUB_TREE         = "https://api.github.com/repos/Phlanka/DayZ-Geometry-Maker/git/trees/{branch}?recursive=1"
+GITHUB_RAW          = "https://raw.githubusercontent.com/Phlanka/DayZ-Geometry-Maker/{branch}/{path}"
+ADDON_DIR           = os.path.dirname(os.path.abspath(__file__))
+ADDON_BL_IDNAME     = "bl_ext.user_default.dayz_geometry_maker"
 
-# Set from bl_info at register time
-CURRENT_VERSION = (2, 1, 0)
-ADDON_BL_IDNAME = "bl_ext.user_default.dayz_geometry_maker"
+CURRENT_VERSION     = (2, 1, 0)  # keep in sync with bl_info in __init__.py
 
+# ---------------------------------------------------------------------------
+# Shared state  (written from background threads, read on main thread)
+# ---------------------------------------------------------------------------
+
+# -- Release (main branch) state --
 _update_available    = False
 _latest_version_str  = ""
 _latest_download_url = ""
 
-# Early access state
-_beta_changed_files  = []   # list of {filename, sha, date} dicts from last check
-_beta_check_done     = False
-_beta_check_running  = False
+# -- Dev branch state --
+_dev_check_running   = False
+_dev_check_done      = False
+_dev_changed_files   = []   # list of repo-relative file paths that differ locally
 
 
 # ---------------------------------------------------------------------------
@@ -51,75 +61,72 @@ def _request(url):
         return json.loads(resp.read().decode())
 
 
-def _read_beta_timestamp():
-    """Return ISO timestamp string of last beta pull, or None."""
-    try:
-        with open(BETA_TIMESTAMP_FILE, "r") as f:
-            return json.load(f).get("last_pull")
-    except Exception:
+def _local_sha(filepath):
+    """
+    Compute the git blob SHA for a local file.
+    Git blob SHA = sha1("blob <size>\0<content>").
+    Returns hex string, or None if file doesn't exist.
+    """
+    import hashlib
+    if not os.path.isfile(filepath):
         return None
+    with open(filepath, "rb") as f:
+        content = f.read()
+    header  = "blob {}\0".format(len(content)).encode()
+    return hashlib.sha1(header + content).hexdigest()
 
 
-def _write_beta_timestamp(iso_str):
-    with open(BETA_TIMESTAMP_FILE, "w") as f:
-        json.dump({"last_pull": iso_str}, f)
-
-
-def _latest_release_date():
-    """Return the published_at ISO string of the latest release, or None."""
+def _redraw_prefs():
     try:
-        data = _request(GITHUB_API)
-        return data.get("published_at")
-    except Exception:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Release update check
-# ---------------------------------------------------------------------------
-
-def _check_thread():
-    global _update_available, _latest_version_str, _latest_download_url
-    try:
-        data = _request(GITHUB_API)
-        tag = data.get("tag_name", "")
-        remote = _parse_version(tag)
-        print("[DGM] Updater: current={} remote={} tag={}".format(CURRENT_VERSION, remote, tag))
-        if remote > CURRENT_VERSION:
-            _update_available = True
-            _latest_version_str = tag
-            assets = data.get("assets", [])
-            for asset in assets:
-                if asset.get("name", "").endswith(".zip"):
-                    _latest_download_url = asset.get("browser_download_url", "")
-                    break
-            if not _latest_download_url:
-                _latest_download_url = data.get("zipball_url", "")
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type in ('PREFERENCES', 'VIEW_3D'):
+                    area.tag_redraw()
     except Exception:
         pass
 
 
-def _poll_for_update():
-    global _poll_count
-    _poll_count = getattr(_poll_for_update, "_count", 0) + 1
-    _poll_for_update._count = _poll_count
+# ---------------------------------------------------------------------------
+# Release update check  (main branch — background thread + poll timer)
+# ---------------------------------------------------------------------------
 
+def _release_check_thread():
+    global _update_available, _latest_version_str, _latest_download_url
+    try:
+        data = _request(GITHUB_API_RELEASE)
+        tag  = data.get("tag_name", "")
+        remote = _parse_version(tag)
+        print("[DGM] Release check: local={} remote={} tag={}".format(CURRENT_VERSION, remote, tag))
+        if remote > CURRENT_VERSION:
+            _update_available   = True
+            _latest_version_str = tag
+            for asset in data.get("assets", []):
+                if asset.get("name", "").endswith(".zip"):
+                    _latest_download_url = asset["browser_download_url"]
+                    break
+            if not _latest_download_url:
+                _latest_download_url = data.get("zipball_url", "")
+    except Exception as e:
+        print("[DGM] Release check failed:", e)
+
+
+def _poll_for_update():
+    _poll_for_update._count = getattr(_poll_for_update, "_count", 0) + 1
     if _update_available:
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:
                 if area.type == 'VIEW_3D':
                     area.tag_redraw()
-        print("[DGM] Updater: update {} available.".format(_latest_version_str))
+        print("[DGM] Update {} available.".format(_latest_version_str))
         return None
-
-    if _poll_count >= 60:
+    if _poll_for_update._count >= 60:
         return None
     return 0.5
 
 
 def check_for_update():
     _poll_for_update._count = 0
-    t = threading.Thread(target=_check_thread, daemon=True)
+    t = threading.Thread(target=_release_check_thread, daemon=True)
     t.start()
     bpy.app.timers.register(_poll_for_update, first_interval=1.0)
 
@@ -128,13 +135,13 @@ def check_for_update():
 # Release install
 # ---------------------------------------------------------------------------
 
-def _do_install(operator):
+def _do_install_release(operator):
     import zipfile, shutil, tempfile
     if not _latest_download_url:
-        operator.report({'ERROR'}, "No download URL found.")
+        operator.report({'ERROR'}, "No download URL — run Check for Updates first.")
         return {'CANCELLED'}
     try:
-        tmp_zip = tempfile.mktemp(suffix=".zip")
+        tmp_zip   = tempfile.mktemp(suffix=".zip")
         req = urllib.request.Request(
             _latest_download_url,
             headers={"User-Agent": "DayZ-Geometry-Maker-Updater"},
@@ -148,7 +155,7 @@ def _do_install(operator):
 
         with zipfile.ZipFile(tmp_zip, 'r') as zf:
             names = zf.namelist()
-            top = names[0].split('/')[0] if names else ""
+            top   = names[0].split('/')[0] if names else ""
             zf.extractall(parent_dir)
 
         extracted = os.path.join(parent_dir, top)
@@ -162,80 +169,69 @@ def _do_install(operator):
         operator.report({'INFO'}, "Updated to {}! Please restart Blender.".format(_latest_version_str))
         return {'FINISHED'}
     except Exception as e:
-        operator.report({'ERROR'}, "Update failed: " + str(e))
+        operator.report({'ERROR'}, "Install failed: " + str(e))
         return {'CANCELLED'}
 
 
 # ---------------------------------------------------------------------------
-# Early access — check live branch for changed files
+# Dev branch — file-level SHA diff + pull
 # ---------------------------------------------------------------------------
 
-def _beta_check_thread(since_iso):
+def _dev_check_thread():
     """
-    Fetch commits on main since `since_iso`, collect all unique files touched,
-    and store them in _beta_changed_files.
+    Fetch the full file tree from the dev branch, compare each blob SHA
+    against the local file SHA, and store changed/new files in _dev_changed_files.
     """
-    global _beta_changed_files, _beta_check_done, _beta_check_running
+    global _dev_changed_files, _dev_check_done, _dev_check_running
     try:
-        url = GITHUB_COMMITS + "?sha=main&per_page=100"
-        if since_iso:
-            url += "&since=" + since_iso
+        url  = GITHUB_TREE.format(branch="dev")
+        data = _request(url)
+        tree = data.get("tree", [])
 
-        commits = _request(url)
-        seen = {}  # filename -> date of most recent commit touching it
+        changed = []
+        for item in tree:
+            if item.get("type") != "blob":
+                continue
+            path       = item["path"]
+            remote_sha = item.get("sha", "")
+            local_path = os.path.join(ADDON_DIR, path)
+            local_sha  = _local_sha(local_path)
+            if local_sha != remote_sha:
+                changed.append(path)
+                print("[DGM] Dev diff: {} (local={} remote={})".format(
+                    path, local_sha or "missing", remote_sha[:8]))
 
-        for commit in commits:
-            sha  = commit.get("sha", "")
-            date = commit.get("commit", {}).get("author", {}).get("date", "")
-            detail_url = "https://api.github.com/repos/Phlanka/DayZ-Geometry-Maker/commits/" + sha
-            try:
-                detail = _request(detail_url)
-                for f in detail.get("files", []):
-                    fname = f.get("filename", "")
-                    if fname and fname not in seen:
-                        seen[fname] = {"filename": fname, "sha": sha, "date": date}
-            except Exception:
-                pass
-
-        _beta_changed_files = list(seen.values())
-        print("[DGM] Early Access: {} changed file(s) found.".format(len(_beta_changed_files)))
+        _dev_changed_files = changed
+        print("[DGM] Dev check done: {} file(s) differ.".format(len(changed)))
     except Exception as e:
-        print("[DGM] Early Access check failed:", e)
+        print("[DGM] Dev check failed:", e)
     finally:
-        _beta_check_done    = True
-        _beta_check_running = False
-        # Redraw preferences area
-        try:
-            for window in bpy.context.window_manager.windows:
-                for area in window.screen.areas:
-                    if area.type in ('PREFERENCES', 'VIEW_3D'):
-                        area.tag_redraw()
-        except Exception:
-            pass
+        _dev_check_done    = True
+        _dev_check_running = False
+        _redraw_prefs()
 
 
-def start_beta_check():
-    global _beta_check_done, _beta_check_running, _beta_changed_files
-    if _beta_check_running:
+def start_dev_check():
+    global _dev_check_done, _dev_check_running, _dev_changed_files
+    if _dev_check_running:
         return
-
-    _beta_check_done    = False
-    _beta_check_running = True
-    _beta_changed_files = []
-
-    # On first check, use the latest release date so we see everything since release
-    since = _read_beta_timestamp() or _latest_release_date()
-    t = threading.Thread(target=_beta_check_thread, args=(since,), daemon=True)
+    _dev_check_done    = False
+    _dev_check_running = True
+    _dev_changed_files = []
+    t = threading.Thread(target=_dev_check_thread, daemon=True)
     t.start()
 
 
-def _do_beta_pull(operator, filenames):
-    """Download each listed file from main branch and overwrite local copy."""
-    from datetime import datetime, timezone
+def _do_dev_pull(operator):
+    """Download every changed file from the dev branch and overwrite local copies."""
+    if not _dev_changed_files:
+        operator.report({'WARNING'}, "No changes to pull.")
+        return {'CANCELLED'}
+
     failed = []
-    for fname in filenames:
-        url = GITHUB_RAW.format(fname)
-        local_path = os.path.join(ADDON_DIR, fname)
+    for path in _dev_changed_files:
+        url        = GITHUB_RAW.format(branch="dev", path=path)
+        local_path = os.path.join(ADDON_DIR, path)
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "DayZ-Geometry-Maker-Updater"})
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -243,16 +239,15 @@ def _do_beta_pull(operator, filenames):
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             with open(local_path, 'wb') as f:
                 f.write(content)
+            print("[DGM] Pulled: {}".format(path))
         except Exception as e:
-            failed.append("{}: {}".format(fname, e))
-
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _write_beta_timestamp(now_iso)
+            failed.append("{}: {}".format(path, e))
 
     if failed:
         operator.report({'WARNING'}, "Some files failed: " + "; ".join(failed))
     else:
-        operator.report({'INFO'}, "Downloaded {} file(s). Please restart Blender.".format(len(filenames)))
+        operator.report({'INFO'}, "Pulled {} file(s) from dev. Please restart Blender.".format(
+            len(_dev_changed_files)))
     return {'FINISHED'}
 
 
@@ -260,19 +255,10 @@ def _do_beta_pull(operator, filenames):
 # Operators
 # ---------------------------------------------------------------------------
 
-class DGM_OT_install_update(bpy.types.Operator):
-    bl_idname = "dgm.install_update"
-    bl_label = "Install Update"
-    bl_description = "Download and install the latest DayZ Geometry Maker release from GitHub"
-
-    def execute(self, context):
-        return _do_install(self)
-
-
 class DGM_OT_check_update(bpy.types.Operator):
-    bl_idname = "dgm.check_update"
-    bl_label = "Check for Updates"
-    bl_description = "Check GitHub for a newer release of DayZ Geometry Maker"
+    bl_idname     = "dgm.check_update"
+    bl_label      = "Check for Updates"
+    bl_description = "Check GitHub Releases for a newer version"
 
     def execute(self, context):
         check_for_update()
@@ -280,35 +266,40 @@ class DGM_OT_check_update(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class DGM_OT_beta_check(bpy.types.Operator):
-    bl_idname = "dgm.beta_check"
-    bl_label = "Check for Early Access Changes"
-    bl_description = "Check the live GitHub source for files changed since your last pull"
+class DGM_OT_install_update(bpy.types.Operator):
+    bl_idname     = "dgm.install_update"
+    bl_label      = "Install Update"
+    bl_description = "Download and install the latest release from GitHub"
 
     def execute(self, context):
-        start_beta_check()
-        self.report({'INFO'}, "Checking GitHub source...")
+        return _do_install_release(self)
+
+
+class DGM_OT_dev_check(bpy.types.Operator):
+    bl_idname     = "dgm.dev_check"
+    bl_label      = "Check dev branch for changes"
+    bl_description = "Compare local addon files against the dev branch on GitHub"
+
+    def execute(self, context):
+        start_dev_check()
+        self.report({'INFO'}, "Checking dev branch...")
         return {'FINISHED'}
 
 
-class DGM_OT_beta_pull(bpy.types.Operator):
-    bl_idname = "dgm.beta_pull"
-    bl_label = "Download Changes"
-    bl_description = "Download all changed source files from the live GitHub branch"
+class DGM_OT_dev_pull(bpy.types.Operator):
+    bl_idname     = "dgm.dev_pull"
+    bl_label      = "Pull Changes from dev"
+    bl_description = "Download all changed files from the dev branch and overwrite local copies. Restart Blender after."
 
     def execute(self, context):
-        if not _beta_changed_files:
-            self.report({'WARNING'}, "No changed files to download.")
-            return {'CANCELLED'}
-        filenames = [f["filename"] for f in _beta_changed_files]
-        return _do_beta_pull(self, filenames)
+        return _do_dev_pull(self)
 
 
 updater_classes = (
-    DGM_OT_install_update,
     DGM_OT_check_update,
-    DGM_OT_beta_check,
-    DGM_OT_beta_pull,
+    DGM_OT_install_update,
+    DGM_OT_dev_check,
+    DGM_OT_dev_pull,
 )
 
 
@@ -319,63 +310,62 @@ updater_classes = (
 class DGMAddonPreferences(bpy.types.AddonPreferences):
     bl_idname = ADDON_BL_IDNAME
 
-    early_access: bpy.props.BoolProperty(
-        name="Early Access",
-        description="Check the live GitHub source branch for unreleased file changes",
+    use_dev_branch: bpy.props.BoolProperty(
+        name="Use dev branch",
+        description=(
+            "Switch to the dev branch for updates. "
+            "Dev builds are unreleased and may be unstable. "
+            "Updates are pulled as individual files rather than release zips"
+        ),
         default=False,
     )
 
     def draw(self, context):
         layout = self.layout
 
-        # ---- Release update ----
-        box = layout.box()
-        row = box.row()
-        row.label(text="Release Updates", icon='URL')
-        row.operator("dgm.check_update", text="Check Now")
+        # ---- Branch selector ----
+        branch_box = layout.box()
+        row = branch_box.row(align=True)
+        row.label(text="Branch:", icon='FILEBROWSER')
+        row.prop(self, "use_dev_branch", text="dev" if self.use_dev_branch else "main", toggle=True)
 
-        # ---- Early access ----
-        ea_box = layout.box()
-        ea_row = ea_box.row()
-        ea_row.prop(self, "early_access", text="Early Access Mode")
+        if self.use_dev_branch:
+            branch_box.label(text="Tracking: dev branch  (unreleased builds)", icon='ERROR')
+        else:
+            branch_box.label(
+                text="Tracking: main branch  (v{}.{}.{})".format(*CURRENT_VERSION),
+                icon='CHECKMARK',
+            )
 
-        if self.early_access:
-            ts = _read_beta_timestamp()
-            if ts:
-                ea_box.label(text="Last pull: " + ts, icon='TIME')
+        layout.separator()
+
+        if not self.use_dev_branch:
+            # ---- main: release update ----
+            box = layout.box()
+            box.label(text="Release Updates", icon='URL')
+            if _update_available:
+                row = box.row(align=True)
+                row.label(text="Version {} available!".format(_latest_version_str), icon='INFO')
+                row.operator("dgm.install_update", text="Install", icon='IMPORT')
             else:
-                ea_box.label(text="No pull yet — will check since latest release", icon='INFO')
+                box.operator("dgm.check_update", text="Check for Release Update", icon='FILE_REFRESH')
 
-            if _beta_check_running:
-                ea_box.label(text="Checking GitHub...", icon='SORTTIME')
-            elif _beta_check_done:
-                if _beta_changed_files:
-                    ea_box.label(
-                        text="{} changed file(s) available:".format(len(_beta_changed_files)),
-                        icon='FILE_REFRESH'
+        else:
+            # ---- dev: file-level diff + pull ----
+            box = layout.box()
+            box.label(text="Dev Branch Updates", icon='CONSOLE')
+
+            if _dev_check_running:
+                box.label(text="Checking dev branch...", icon='SORTTIME')
+            elif _dev_check_done:
+                if _dev_changed_files:
+                    box.label(
+                        text="{} file(s) differ from dev:".format(len(_dev_changed_files)),
+                        icon='FILE_REFRESH',
                     )
-                    col = ea_box.column(align=True)
-                    for f in _beta_changed_files:
-                        col.label(text="  " + f["filename"], icon='DOT')
-                    ea_box.operator("dgm.beta_pull", text="Download All Changes", icon='IMPORT')
+                    col = box.column(align=True)
+                    for path in _dev_changed_files:
+                        col.label(text=path, icon='DOT')
+                    box.operator("dgm.dev_pull", text="Pull All Changes", icon='IMPORT')
                 else:
-                    ea_box.label(text="No new changes since last pull.", icon='CHECKMARK')
-            else:
-                ea_box.operator("dgm.beta_check", text="Check for Changes", icon='FILE_REFRESH')
-
-
-# ---------------------------------------------------------------------------
-# Register
-# ---------------------------------------------------------------------------
-
-def register():
-    bpy.utils.register_class(DGMAddonPreferences)
-    for cls in updater_classes:
-        bpy.utils.register_class(cls)
-    check_for_update()
-
-
-def unregister():
-    for cls in reversed(updater_classes):
-        bpy.utils.unregister_class(cls)
-    bpy.utils.unregister_class(DGMAddonPreferences)
+                    box.label(text="Already up to date wi
