@@ -83,7 +83,7 @@ def write_model_cfg(filepath, objects, model_name=None):
     if model_name is None:
         model_name = os.path.splitext(os.path.basename(filepath))[0]
 
-    cfg_path = os.path.splitext(filepath)[0] + ".cfg"
+    cfg_path = os.path.join(os.path.dirname(filepath), "model.cfg")
 
     try:
         import bpy
