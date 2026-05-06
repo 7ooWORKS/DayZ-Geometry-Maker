@@ -759,13 +759,24 @@ def _assets_path(filename):
     return os.path.join(os.path.dirname(__file__), "assets", filename)
 
 
-def add_memory_ladder():
+def add_memory_ladder(ladder_idx=1):
     """
-    Import ladder Memory, Geometry and View Geometry LODs from bundled P3D assets.
-    All three LODs are created from pre-authored P3D files so named selections,
-    vertex positions and face assignments are exactly as tested in Object Builder.
+    Import ladder Memory and View Geometry LODs from bundled P3D assets.
+    ladder_idx (1-3) controls which prefix is used: ladder1, ladder2, ladder3.
+    Named selections from the P3D (always 'ladder1' prefix) are renamed to match
+    the requested index.
     """
     ensure_object_mode()
+
+    prefix = "ladder{}".format(ladder_idx)
+    point_names = [
+        prefix,
+        prefix + '_bottom_front',
+        prefix + '_con',
+        prefix + '_con_dir',
+        prefix + '_dir',
+        prefix + '_top_front',
+    ]
 
     # --- Memory LOD ---
     try:
@@ -776,29 +787,50 @@ def add_memory_ladder():
 
     mem = _get_or_create_memory_object()
 
-    # Remove any existing ladder selections from the shared Memory object
-    _remove_memory_groups(mem, [
-        'ladder1', 'ladder1_bottom_front', 'ladder1_con',
-        'ladder1_con_dir', 'ladder1_dir', 'ladder1_top_front'
-    ])
+    # Remove any existing selections for this ladder slot
+    _remove_memory_groups(mem, point_names)
+
+    # Each additional ladder index is offset upward on Z so groups don't overlap
+    import mathutils
+    z_offset = mathutils.Vector((0.0, 0.0, (ladder_idx - 1) * 4.0))
 
     base = len(mem.data.vertices)
     mem.data.vertices.add(len(verts))
     for i, co in enumerate(verts):
-        mem.data.vertices[base + i].co = co
+        mem.data.vertices[base + i].co = mathutils.Vector(co) + z_offset
     mem.data.update()
 
+    # The P3D always uses 'ladder1' prefix — remap to the requested index
     for sel_name, sel_data in named_selections.items():
         # Skip any corrupted/internal selection names (e.g. "AGG\x01...")
         if not sel_name.isascii() or '\x01' in sel_name:
             continue
+        remapped = sel_name.replace("ladder1", prefix, 1)
         shifted = [i + base for i in sel_data['verts']]
-        vg = mem.vertex_groups.get(sel_name) or mem.vertex_groups.new(name=sel_name)
+        vg = mem.vertex_groups.get(remapped) or mem.vertex_groups.new(name=remapped)
         if shifted:
             vg.add(shifted, 1.0, 'REPLACE')
 
     # --- View Geometry LOD ---
-    create_view_geometry_ladder()
+    create_view_geometry_ladder(ladder_idx=ladder_idx)
+
+
+def remove_memory_ladder(ladder_idx=1):
+    """Remove all memory points and View Geometry for a ladder group by index."""
+    ensure_object_mode()
+    prefix = "ladder{}".format(ladder_idx)
+    point_names = [
+        prefix,
+        prefix + '_bottom_front',
+        prefix + '_con',
+        prefix + '_con_dir',
+        prefix + '_dir',
+        prefix + '_top_front',
+    ]
+    mem = get_memory_object()
+    if mem:
+        _remove_memory_groups(mem, point_names)
+    remove_view_geometry_ladder(ladder_idx=ladder_idx)
 
 
 def _create_lod_from_p3d(filepath, obj_name, collection_name, lod_key):
@@ -828,18 +860,50 @@ def _create_lod_from_p3d(filepath, obj_name, collection_name, lod_key):
     move_to_collection(obj, collection_name)
     return obj
 
-def create_view_geometry_ladder():
-    """Import the bundled ladder View Geometry P3D as a DayZ LOD object."""
+def _ladder_vg_obj_name(ladder_idx):
+    """Canonical object name for a ladder View Geometry object."""
+    return "View Geometry.ladder{}".format(ladder_idx)
+
+
+def create_view_geometry_ladder(ladder_idx=1):
+    """Import the bundled ladder View Geometry P3D as a DayZ LOD object.
+
+    The created object is named 'View Geometry.ladderN' so it can be found
+    and deleted when the corresponding memory group is removed.
+    Each index is offset upward on Z to match the memory point placement.
+    """
+    import mathutils
+    obj_name = _ladder_vg_obj_name(ladder_idx)
+
+    # Remove any existing object for this slot first
+    existing = bpy.data.objects.get(obj_name)
+    if existing:
+        bpy.data.objects.remove(existing, do_unlink=True)
+
     try:
-        return _create_lod_from_p3d(
+        obj = _create_lod_from_p3d(
             _assets_path("ladder_view_geometry.p3d"),
-            obj_name="View Geometry",
+            obj_name=obj_name,
             collection_name="View Geometry",
             lod_key="View Geometry",
         )
     except Exception as e:
         print(f"[DGM] Failed to load ladder View Geometry P3D: {e}")
         return None
+
+    if obj is not None:
+        z_offset = (ladder_idx - 1) * 4.0
+        obj.location.z += z_offset
+
+    return obj
+
+
+def remove_view_geometry_ladder(ladder_idx=1):
+    """Delete the View Geometry object for a given ladder index."""
+    obj_name = _ladder_vg_obj_name(ladder_idx)
+    obj = bpy.data.objects.get(obj_name)
+    if obj:
+        bpy.data.objects.remove(obj, do_unlink=True)
 
 
 def add_memory_lights(count=1):
