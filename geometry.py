@@ -325,40 +325,6 @@ def create_view_geometry():
     move_to_collection(obj, "View Geometry")
     return obj
 
-# ---------------------------------------------------------------------------
-# View Geometry LOD for LADDER
-# ---------------------------------------------------------------------------
-
-def create_view_geometry_ladder():
-    original_obj = bpy.context.scene.dgm_target_object
-    if not original_obj or original_obj.type != 'MESH':
-        return None
-
-    min_x, max_x, min_y, max_y, min_z, max_z = get_bbox(original_obj)
-    cx = (max_x + min_x) / 2
-    cy = (max_y + min_y) / 2
-    cz = (max_z + min_z) / 2
-
-    bpy.ops.mesh.primitive_cube_add(size=1, location=(cx, cy, cz))
-    obj = bpy.context.object
-    obj.name = "View Geometry"
-    obj.scale = (max_x - min_x, max_y - min_y, max_z - min_z)
-    bpy.ops.object.transform_apply(scale=True)
-
-    all_verts = [v.index for v in obj.data.vertices]
-
-    vg1 = obj.vertex_groups.new(name="Component01")
-    vg1.add(all_verts, 1.0, 'REPLACE')
-
-    vg2 = obj.vertex_groups.new(name="ladder1")
-    vg2.add(all_verts, 1.0, 'REPLACE')
-
-    set_dgm_props(obj, LOD_VALUES["View Geometry"])
-    assign_default_material(obj)
-    move_to_collection(obj, "View Geometry")
-
-    return obj
-
 
 # ---------------------------------------------------------------------------
 # Fire Geometry LOD
@@ -718,79 +684,162 @@ def add_memory_magazine():
     ])
 
 
+def _parse_p3d_lod(filepath):
+    """
+    Parse a single-LOD MLOD P3D file.
+    Returns (verts, faces, named_selections, resolution) where:
+      verts            : list of (x, y, z) in Blender space (Arma XZY -> Blender XYZ)
+      faces            : list of vertex-index lists (quads or tris)
+      named_selections : dict  name -> {'verts': [...], 'faces': [...]}
+      resolution       : float LOD resolution value
+    """
+    import struct, os
+
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Bundled P3D not found: {filepath}")
+
+    data = open(filepath, "rb").read()
+    pos = 0
+
+    assert data[pos:pos+4] == b'MLOD', "Not a valid MLOD P3D"
+    pos += 12  # sig(4) + version(4) + nlods(4)
+
+    assert data[pos:pos+4] == b'P3DM', "Expected P3DM LOD"
+    pos += 4 + 8  # sig + version_major + version_minor
+
+    npoints, nnormals, nfaces = struct.unpack_from('<III', data, pos)
+    pos += 16  # 3 counts + flags
+
+    # Vertices stored as (x, z, y, flags) — swap z/y for Blender
+    verts = []
+    for _ in range(npoints):
+        x, z, y, _flag = struct.unpack_from('<fffI', data, pos); pos += 16
+        verts.append((x, y, z))
+
+    pos += nnormals * 12  # skip normals
+
+    faces = []
+    for _ in range(nfaces):
+        count_sides = struct.unpack_from('<I', data, pos)[0]; pos += 4
+        fv = []
+        for _ in range(count_sides):
+            vi, _ni, _u, _v = struct.unpack_from('<IIff', data, pos); pos += 16
+            fv.append(vi)
+        if count_sides < 4:
+            pos += 16  # triangle padding slot
+        pos += 4  # face flags
+        pos = data.index(b'\x00', pos) + 1  # texture string
+        pos = data.index(b'\x00', pos) + 1  # material string
+        faces.append(fv)
+
+    named_selections = {}
+    while pos < len(data):
+        active = data[pos]; pos += 1
+        if active == 0:
+            break
+        end = data.index(b'\x00', pos)
+        name = data[pos:end].decode('ascii', errors='replace'); pos = end + 1
+        length = struct.unpack_from('<I', data, pos)[0]; pos += 4
+        tagg_data = data[pos:pos+length]; pos += length
+        if name == '#EndOfFile#':
+            break
+        if name.startswith('#'):
+            continue
+        named_selections[name] = {
+            'verts': [i for i, w in enumerate(tagg_data[:npoints]) if w > 0],
+            'faces': [i for i, s in enumerate(tagg_data[npoints:npoints+nfaces]) if s > 0],
+        }
+
+    resolution = struct.unpack_from('<f', data, pos)[0]
+    return verts, faces, named_selections, resolution
+
+
+def _assets_path(filename):
+    import os
+    return os.path.join(os.path.dirname(__file__), "assets", filename)
+
+
 def add_memory_ladder():
-    b = _bbox_data()
-    if not b:
+    """
+    Import ladder Memory, Geometry and View Geometry LODs from bundled P3D assets.
+    All three LODs are created from pre-authored P3D files so named selections,
+    vertex positions and face assignments are exactly as tested in Object Builder.
+    """
+    ensure_object_mode()
+
+    # --- Memory LOD ---
+    try:
+        verts, faces, named_selections, _ = _parse_p3d_lod(_assets_path("ladder_memory.p3d"))
+    except Exception as e:
+        print(f"[DGM] Failed to load ladder Memory P3D: {e}")
         return
 
     mem = _get_or_create_memory_object()
 
+    # Remove any existing ladder selections from the shared Memory object
     _remove_memory_groups(mem, [
         'ladder1', 'ladder1_bottom_front', 'ladder1_con',
         'ladder1_con_dir', 'ladder1_dir', 'ladder1_top_front'
     ])
 
-    ensure_object_mode()
-
-    min_z = b['min_z']
-    max_z = b['max_z']
-    height = max_z - min_z
-
-    z_ladder1_bottom = min_z + 1.30
-    z_ladder1_top = max_z - height * 0.15
-
-    z_bottom_front = min_z + 0.34
-    z_con_top = max_z - height * 0.20
-
-    cx = b['cx']
-    cy = b['cy']
-
-    front_offset = 0.3  # 30 cm
-
-    v_ladder1_top = (cx, cy, z_ladder1_top)
-    v_ladder1_bottom = (cx, cy, z_ladder1_bottom)
-
-    v_bottom_front = (cx, cy, z_bottom_front)
-    v_con_top = (cx, cy, z_con_top)
-
-    v_con_dir_bottom = (b['max_x'] + front_offset, cy, z_bottom_front)
-    v_con_dir_top = (b['min_x'] - front_offset, cy, z_con_top)
-
     base = len(mem.data.vertices)
-    coords = [
-        v_ladder1_top,
-        v_ladder1_bottom,
-        v_bottom_front,
-        v_con_top,
-        v_con_dir_bottom,
-        v_con_dir_top,
-    ]
-
-    mem.data.vertices.add(len(coords))
-    for i, co in enumerate(coords):
+    mem.data.vertices.add(len(verts))
+    for i, co in enumerate(verts):
         mem.data.vertices[base + i].co = co
-
     mem.data.update()
 
-    i_top = base + 0
-    i_bottom = base + 1
-    i_bottom_front = base + 2
-    i_con_top = base + 3
-    i_dir_bottom = base + 4
-    i_dir_top = base + 5
+    for sel_name, sel_data in named_selections.items():
+        # Skip any corrupted/internal selection names (e.g. "AGG\x01...")
+        if not sel_name.isascii() or '\x01' in sel_name:
+            continue
+        shifted = [i + base for i in sel_data['verts']]
+        vg = mem.vertex_groups.get(sel_name) or mem.vertex_groups.new(name=sel_name)
+        if shifted:
+            vg.add(shifted, 1.0, 'REPLACE')
 
-    def add(group, indices):
-        vg = mem.vertex_groups.get(group) or mem.vertex_groups.new(name=group)
-        vg.add(indices, 1.0, 'REPLACE')
-
-    add('ladder1', [i_top, i_bottom])
-    add('ladder1_bottom_front', [i_bottom_front])
-    add('ladder1_con', [i_bottom_front, i_con_top])
-    add('ladder1_con_dir', [i_dir_bottom, i_dir_top])
-    add('ladder1_dir', [i_dir_bottom])
-    add('ladder1_top_front', [i_con_top])
-
+    # --- View Geometry LOD ---
     create_view_geometry_ladder()
+
+
+def _create_lod_from_p3d(filepath, obj_name, collection_name, lod_key):
+    """
+    Parse a P3D and create a Blender mesh object registered as a DayZ LOD.
+    Named selections are recreated as vertex groups.
+    """
+    verts, faces, named_selections, _ = _parse_p3d_lod(filepath)
+
+    mesh = bpy.data.meshes.new(obj_name)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+
+    obj = bpy.data.objects.new(obj_name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+
+    for sel_name, sel_data in named_selections.items():
+        if not sel_name.isascii() or '\x01' in sel_name:
+            continue
+        vg = obj.vertex_groups.new(name=sel_name)
+        if sel_data['verts']:
+            vg.add(sel_data['verts'], 1.0, 'REPLACE')
+
+    set_dgm_props(obj, LOD_VALUES[lod_key])
+    assign_default_material(obj)
+    set_active(obj)
+    move_to_collection(obj, collection_name)
+    return obj
+
+def create_view_geometry_ladder():
+    """Import the bundled ladder View Geometry P3D as a DayZ LOD object."""
+    try:
+        return _create_lod_from_p3d(
+            _assets_path("ladder_view_geometry.p3d"),
+            obj_name="View Geometry",
+            collection_name="View Geometry",
+            lod_key="View Geometry",
+        )
+    except Exception as e:
+        print(f"[DGM] Failed to load ladder View Geometry P3D: {e}")
+        return None
 
 
 def add_memory_lights(count=1):
