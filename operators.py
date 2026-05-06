@@ -1479,7 +1479,7 @@ def register_scene_props():
 
     # Export paths
     S.dgm_p3d_path = bpy.props.StringProperty(
-        name="P3D", subtype='NONE', default=""
+        name="P3D", subtype='FILE_PATH', default=""
     )
     S.dgm_textures_path = bpy.props.StringProperty(
         name="Textures", subtype='DIR_PATH', default=""
