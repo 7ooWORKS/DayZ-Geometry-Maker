@@ -1409,6 +1409,7 @@ class DGM_PT_main_panel(bpy.types.Panel):
                     col.prop(scene, "dgm_scripts_path", text="Scripts")
 
             col.separator()
+            col.prop(scene, "dgm_write_model_cfg")
             col.operator("dgm.export_p3d", text="Export", icon='EXPORT')
             box.separator()
             box.operator("dgm.check_update", text="Check for Updates", icon='URL')
@@ -1496,6 +1497,11 @@ def register_scene_props():
         ],
         default='container_base',
     )
+    S.dgm_write_model_cfg = bpy.props.BoolProperty(
+        name="Generate model.cfg",
+        description="Write a model.cfg file alongside the P3D on export",
+        default=True,
+    )
 
     # Resolution LOD toggles + view distances (real game meters per wiki guidance)
     for i in range(1, 7):
@@ -1521,6 +1527,7 @@ def unregister_scene_props():
         "dgm_moving_memory_point",
         "dgm_door_pose_active", "dgm_door_pose_active_idx",
         "dgm_p3d_path", "dgm_textures_path", "dgm_scripts_path", "dgm_config_template",
+        "dgm_write_model_cfg",
     ]
     for _di in range(1, 9):
         props += [
