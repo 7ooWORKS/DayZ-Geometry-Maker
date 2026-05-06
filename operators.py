@@ -350,7 +350,7 @@ class DGM_OT_memory_add_magazine(bpy.types.Operator):
 class DGM_OT_memory_add_ladder(bpy.types.Operator):
     bl_idname = "dgm.memory_add_ladder"
     bl_label = "Ladder"
-    bl_description = "Add/update ladder_top and ladder_bottom — for building ladders (Roadway LOD also required)"
+    bl_description = "Add Memory LOD + View Geometry — for building ladders (Adjust the positions according to the docs)"
     bl_options = {'REGISTER', 'UNDO'}
     def execute(self, context):
         if not context.scene.dgm_target_object:
@@ -1255,7 +1255,7 @@ class DGM_PT_main_panel(bpy.types.Panel):
 
             sub = box.box()
             sub.label(text="Building & Structure", icon='MOD_BUILD')
-            _mem_group(sub, "Ladder", "dgm.memory_add_ladder", ['ladder_top', 'ladder_bottom'])
+            _mem_group(sub, "Ladder", "dgm.memory_add_ladder", ['ladder1', 'ladder1_bottom_front', 'ladder1_con', 'ladder1_con_dir', 'ladder1_dir', 'ladder1_top_front'])
 
             def _door_groups(count):
                 return [
