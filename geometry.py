@@ -325,6 +325,40 @@ def create_view_geometry():
     move_to_collection(obj, "View Geometry")
     return obj
 
+# ---------------------------------------------------------------------------
+# View Geometry LOD for LADDER
+# ---------------------------------------------------------------------------
+
+def create_view_geometry_ladder():
+    original_obj = bpy.context.scene.dgm_target_object
+    if not original_obj or original_obj.type != 'MESH':
+        return None
+
+    min_x, max_x, min_y, max_y, min_z, max_z = get_bbox(original_obj)
+    cx = (max_x + min_x) / 2
+    cy = (max_y + min_y) / 2
+    cz = (max_z + min_z) / 2
+
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(cx, cy, cz))
+    obj = bpy.context.object
+    obj.name = "View Geometry"
+    obj.scale = (max_x - min_x, max_y - min_y, max_z - min_z)
+    bpy.ops.object.transform_apply(scale=True)
+
+    all_verts = [v.index for v in obj.data.vertices]
+
+    vg1 = obj.vertex_groups.new(name="Component01")
+    vg1.add(all_verts, 1.0, 'REPLACE')
+
+    vg2 = obj.vertex_groups.new(name="ladder1")
+    vg2.add(all_verts, 1.0, 'REPLACE')
+
+    set_dgm_props(obj, LOD_VALUES["View Geometry"])
+    assign_default_material(obj)
+    move_to_collection(obj, "View Geometry")
+
+    return obj
+
 
 # ---------------------------------------------------------------------------
 # Fire Geometry LOD
@@ -688,12 +722,75 @@ def add_memory_ladder():
     b = _bbox_data()
     if not b:
         return
+
     mem = _get_or_create_memory_object()
-    _remove_memory_groups(mem, ['ladder_top', 'ladder_bottom'])
-    _add_memory_verts(mem, [
-        ('ladder_top',    (b['cx'], b['cy'], b['max_z'])),
-        ('ladder_bottom', (b['cx'], b['cy'], b['min_z'])),
+
+    _remove_memory_groups(mem, [
+        'ladder1', 'ladder1_bottom_front', 'ladder1_con',
+        'ladder1_con_dir', 'ladder1_dir', 'ladder1_top_front'
     ])
+
+    ensure_object_mode()
+
+    min_z = b['min_z']
+    max_z = b['max_z']
+    height = max_z - min_z
+
+    z_ladder1_bottom = min_z + 1.30
+    z_ladder1_top = max_z - height * 0.15
+
+    z_bottom_front = min_z + 0.34
+    z_con_top = max_z - height * 0.20
+
+    cx = b['cx']
+    cy = b['cy']
+
+    front_offset = 0.3  # 30 cm
+
+    v_ladder1_top = (cx, cy, z_ladder1_top)
+    v_ladder1_bottom = (cx, cy, z_ladder1_bottom)
+
+    v_bottom_front = (cx, cy, z_bottom_front)
+    v_con_top = (cx, cy, z_con_top)
+
+    v_con_dir_bottom = (b['max_x'] + front_offset, cy, z_bottom_front)
+    v_con_dir_top = (b['min_x'] - front_offset, cy, z_con_top)
+
+    base = len(mem.data.vertices)
+    coords = [
+        v_ladder1_top,
+        v_ladder1_bottom,
+        v_bottom_front,
+        v_con_top,
+        v_con_dir_bottom,
+        v_con_dir_top,
+    ]
+
+    mem.data.vertices.add(len(coords))
+    for i, co in enumerate(coords):
+        mem.data.vertices[base + i].co = co
+
+    mem.data.update()
+
+    i_top = base + 0
+    i_bottom = base + 1
+    i_bottom_front = base + 2
+    i_con_top = base + 3
+    i_dir_bottom = base + 4
+    i_dir_top = base + 5
+
+    def add(group, indices):
+        vg = mem.vertex_groups.get(group) or mem.vertex_groups.new(name=group)
+        vg.add(indices, 1.0, 'REPLACE')
+
+    add('ladder1', [i_top, i_bottom])
+    add('ladder1_bottom_front', [i_bottom_front])
+    add('ladder1_con', [i_bottom_front, i_con_top])
+    add('ladder1_con_dir', [i_dir_bottom, i_dir_top])
+    add('ladder1_dir', [i_dir_bottom])
+    add('ladder1_top_front', [i_con_top])
+
+    create_view_geometry_ladder()
 
 
 def add_memory_lights(count=1):
