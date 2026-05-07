@@ -1610,6 +1610,13 @@ class DGM_OT_memory_add_ladder_n(bpy.types.Operator):
         if not context.scene.dgm_target_object:
             self.report({'ERROR'}, "Select a target object first")
             return {'CANCELLED'}
+        # Enforce sequential order — previous ladder must exist first
+        if self.ladder_idx > 1:
+            prev_prefix = "ladder{}".format(self.ladder_idx - 1)
+            if not geometry.memory_point_exists(prev_prefix):
+                self.report({'ERROR'},
+                    "Add Ladder {} first".format(self.ladder_idx - 1))
+                return {'CANCELLED'}
         geometry.add_memory_ladder(ladder_idx=self.ladder_idx)
         return {'FINISHED'}
 
@@ -1618,13 +1625,24 @@ class DGM_OT_memory_delete_ladder(bpy.types.Operator):
     """Delete all memory points of a ladder group."""
     bl_idname = "dgm.memory_delete_ladder"
     bl_label = "Delete Ladder"
-    bl_description = "Remove all memory points for this ladder group"
+    bl_description = "Remove all memory points and view geometry for this ladder group"
     bl_options = {'REGISTER', 'UNDO'}
 
     ladder_idx: bpy.props.IntProperty(default=1, min=1, max=3)
 
     def execute(self, context):
+        # Enforce sequential order — cannot delete if a higher ladder exists
+        if self.ladder_idx < 3:
+            next_prefix = "ladder{}".format(self.ladder_idx + 1)
+            if geometry.memory_point_exists(next_prefix):
+                self.report({'ERROR'},
+                    "Delete Ladder {} first".format(self.ladder_idx + 1))
+                return {'CANCELLED'}
         geometry.remove_memory_ladder(ladder_idx=self.ladder_idx)
+        # Keep the count spinner in sync
+        scene = context.scene
+        if scene.dgm_memory_ladders_count > self.ladder_idx - 1:
+            scene.dgm_memory_ladders_count = max(1, self.ladder_idx - 1)
         self.report({'INFO'}, "Ladder {} deleted".format(self.ladder_idx))
         return {'FINISHED'}
 

@@ -816,7 +816,11 @@ def add_memory_ladder(ladder_idx=1):
 
 
 def remove_memory_ladder(ladder_idx=1):
-    """Remove all memory points and View Geometry for a ladder group by index."""
+    """Remove all memory points and View Geometry for a ladder group by index.
+
+    If the Memory object ends up with no vertex groups after removal, the object
+    itself and its collection are also deleted.
+    """
     ensure_object_mode()
     prefix = "ladder{}".format(ladder_idx)
     point_names = [
@@ -830,6 +834,10 @@ def remove_memory_ladder(ladder_idx=1):
     mem = get_memory_object()
     if mem:
         _remove_memory_groups(mem, point_names)
+        # If Memory object now has no vertex groups, remove it and the collection
+        if len(mem.vertex_groups) == 0:
+            bpy.data.objects.remove(mem, do_unlink=True)
+            _cleanup_empty_collection("Memory")
     remove_view_geometry_ladder(ladder_idx=ladder_idx)
 
 
@@ -865,14 +873,32 @@ def _ladder_vg_obj_name(ladder_idx):
     return "View Geometry.ladder{}".format(ladder_idx)
 
 
+def _cleanup_empty_collection(col_name):
+    """Remove a scene collection if it exists and contains no objects."""
+    col = bpy.data.collections.get(col_name)
+    if col is None:
+        return
+    # Count all objects recursively
+    total = len(col.all_objects)
+    if total == 0:
+        # Unlink from every parent that holds it
+        for parent in list(bpy.data.collections) + [bpy.context.scene.collection]:
+            if col.name in [c.name for c in getattr(parent, 'children', [])]:
+                try:
+                    parent.children.unlink(col)
+                except Exception:
+                    pass
+        bpy.data.collections.remove(col)
+
+
 def create_view_geometry_ladder(ladder_idx=1):
     """Import the bundled ladder View Geometry P3D as a DayZ LOD object.
 
     The created object is named 'View Geometry.ladderN' so it can be found
     and deleted when the corresponding memory group is removed.
     Each index is offset upward on Z to match the memory point placement.
+    The named selection 'Component01' is renamed to 'ladderN' to match the index.
     """
-    import mathutils
     obj_name = _ladder_vg_obj_name(ladder_idx)
 
     # Remove any existing object for this slot first
@@ -892,18 +918,26 @@ def create_view_geometry_ladder(ladder_idx=1):
         return None
 
     if obj is not None:
-        z_offset = (ladder_idx - 1) * 4.0
-        obj.location.z += z_offset
+        # Offset Z to match memory point placement
+        obj.location.z += (ladder_idx - 1) * 4.0
+
+        # Rename the 'ladder1' selection to match the requested index.
+        # 'Component01' is left untouched — only the ladder selection is remapped.
+        if ladder_idx != 1:
+            vg = obj.vertex_groups.get("ladder1")
+            if vg:
+                vg.name = "ladder{}".format(ladder_idx)
 
     return obj
 
 
 def remove_view_geometry_ladder(ladder_idx=1):
-    """Delete the View Geometry object for a given ladder index."""
+    """Delete the View Geometry object for a given ladder index, then clean up empty collections."""
     obj_name = _ladder_vg_obj_name(ladder_idx)
     obj = bpy.data.objects.get(obj_name)
     if obj:
         bpy.data.objects.remove(obj, do_unlink=True)
+    _cleanup_empty_collection("View Geometry")
 
 
 def add_memory_lights(count=1):
