@@ -759,6 +759,161 @@ def _assets_path(filename):
     return os.path.join(os.path.dirname(__file__), "assets", filename)
 
 
+
+# ---------------------------------------------------------------------------
+# Ladder Collision Geometry
+# ---------------------------------------------------------------------------
+
+def _get_or_create_geometry_object():
+    """Return the shared Geometry LOD object, creating it if it does not exist."""
+    col = bpy.data.collections.get("Geometry")
+    if col:
+        for o in col.objects:
+            if o.name == "Geometry" and o.type == 'MESH':
+                return o
+    mesh = bpy.data.meshes.new("Geometry")
+    obj  = bpy.data.objects.new("Geometry", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    set_dgm_props(obj, LOD_VALUES["Geometry"], mass=0.0)
+    clear_named_props(obj)
+    add_named_prop(obj, "autocenter", "0")
+    add_named_prop(obj, "canbeoccluded", "1")
+    add_named_prop(obj, "canocclude", "0")
+    assign_default_material(obj)
+    move_to_collection(obj, "Geometry")
+    return obj
+
+
+def _make_box_verts(cx, cy, cz, sx, sy, sz):
+    """Return 8 corner vertices of a box centred at (cx,cy,cz) with half-extents sx,sy,sz."""
+    return [
+        (cx - sx, cy - sy, cz - sz), (cx + sx, cy - sy, cz - sz),
+        (cx + sx, cy + sy, cz - sz), (cx - sx, cy + sy, cz - sz),
+        (cx - sx, cy - sy, cz + sz), (cx + sx, cy - sy, cz + sz),
+        (cx + sx, cy + sy, cz + sz), (cx - sx, cy + sy, cz + sz),
+    ]
+
+BOX_FACES = [
+    (0,1,2,3), (4,7,6,5),
+    (0,4,5,1), (1,5,6,2),
+    (2,6,7,3), (3,7,4,0),
+]
+
+
+def create_ladder_collision(ladder_obj, mass_per_stringer=20.0):
+    """
+    Create Geometry LOD collision for a ladder — two box components (left+right stringer)
+    added into the shared Geometry object.
+
+    Tracking which ComponentXX belongs to which ladder is done via a custom property
+    'dgm_ladder_col_map' on the Geometry object — a dict {ladder_name: [comp_name, ...]}
+    No extra vertex groups are created beyond the required ComponentXX groups.
+    """
+    width        = ladder_obj.get('dgm_p_width',         0.440)
+    tube_d       = ladder_obj.get('dgm_p_tube_diameter', 0.042)
+    total_height = ladder_obj.get('dgm_ladder_height',   6.0)
+
+    sx_local = width / 2.0
+
+    # World-space ladder position
+    wc       = [ladder_obj.matrix_world @ mathutils.Vector(c) for c in ladder_obj.bound_box]
+    base_z   = min(c.z for c in wc)
+    cx_world = sum(c.x for c in wc) / 8.0
+    cy_world = sum(c.y for c in wc) / 8.0
+
+    geo = _get_or_create_geometry_object()
+
+    # Remove previously generated components for this ladder using the map
+    import json
+    col_map_raw = geo.get('dgm_ladder_col_map', '{}')
+    try:
+        col_map = json.loads(col_map_raw)
+    except Exception:
+        col_map = {}
+
+    ladder_name = ladder_obj.name
+    old_comps = col_map.get(ladder_name, [])
+    if old_comps:
+        old_vg_names = set(old_comps)
+        keep_names   = {vg.name for vg in geo.vertex_groups} - old_vg_names
+        remove_verts = set()
+        for v in geo.data.vertices:
+            v_grp_names = {geo.vertex_groups[g.group].name for g in v.groups}
+            if v_grp_names & old_vg_names and not v_grp_names & keep_names:
+                remove_verts.add(v.index)
+        for vg_name in old_comps:
+            vg = geo.vertex_groups.get(vg_name)
+            if vg:
+                geo.vertex_groups.remove(vg)
+        if remove_verts:
+            bm_del = bmesh.new()
+            bm_del.from_mesh(geo.data)
+            bm_del.verts.ensure_lookup_table()
+            del_v = [bm_del.verts[i] for i in remove_verts if i < len(bm_del.verts)]
+            bmesh.ops.delete(bm_del, geom=del_v, context='VERTS')
+            bm_del.to_mesh(geo.data)
+            bm_del.free()
+            geo.data.update()
+
+    # Build both stringer boxes
+    bm = bmesh.new()
+    bm.from_mesh(geo.data)
+    bm.verts.ensure_lookup_table()
+
+    hl = tube_d / 2.0
+    hh = total_height / 2.0
+    cz = base_z + hh
+
+    # Reserve both component indices up front so they are sequential (01+02, 03+04, etc.)
+    # _next_geometry_component_index scans existing vertex groups — calling it twice in a
+    # loop would return the same index both times because the first group isn't written yet.
+    idx_a = _next_geometry_component_index()
+    # Temporarily mark idx_a as used by inserting a placeholder group
+    _placeholder = geo.vertex_groups.new(name="Component{:02d}".format(idx_a))
+    idx_b = _next_geometry_component_index()
+    geo.vertex_groups.remove(_placeholder)   # remove placeholder — real group added later
+
+    comp_names = ["Component{:02d}".format(idx_a), "Component{:02d}".format(idx_b)]
+
+    new_comps   = []
+    vert_ranges = []
+    for comp_name, stringer_lx in zip(comp_names, (-sx_local, sx_local)):
+        cx = cx_world + stringer_lx
+        cy = cy_world
+
+        base_idx  = len(bm.verts)
+        new_verts = [bm.verts.new(mathutils.Vector(co))
+                     for co in _make_box_verts(cx, cy, cz, hl, hl, hh)]
+        for fi in BOX_FACES:
+            bm.faces.new([new_verts[i] for i in fi])
+
+        new_comps.append(comp_name)
+        vert_ranges.append((comp_name, base_idx, base_idx + 8))
+
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(geo.data)
+    bm.free()
+    geo.data.update()
+
+    # Assign ComponentXX vertex groups only — no tag groups
+    total_verts = len(geo.data.vertices)
+    for comp_name, v_start, v_end in vert_ranges:
+        vert_indices = list(range(v_start, min(v_end, total_verts)))
+        vg = geo.vertex_groups.new(name=comp_name)
+        vg.add(vert_indices, 1.0, 'REPLACE')
+        w = mass_per_stringer / max(len(vert_indices), 1)
+        add_fhq_weights(geo, weight=w)
+
+    # Save the map so we can find these components later
+    col_map[ladder_name] = new_comps
+    geo['dgm_ladder_col_map'] = json.dumps(col_map)
+
+    existing_mass = geo.get("dgm_mass", 0.0)
+    set_dgm_props(geo, LOD_VALUES["Geometry"],
+                  mass=existing_mass + mass_per_stringer * 2)
+
+    return geo
+
 def add_memory_ladder(ladder_idx=1):
     """
     Import ladder Memory and View Geometry LODs from bundled P3D assets.
@@ -790,14 +945,32 @@ def add_memory_ladder(ladder_idx=1):
     # Remove any existing selections for this ladder slot
     _remove_memory_groups(mem, point_names)
 
-    # Each additional ladder index is offset upward on Z so groups don't overlap
     import mathutils
-    z_offset = mathutils.Vector((0.0, 0.0, (ladder_idx - 1) * 4.0))
+
+    # Align spawn to target object:
+    #   X/Y = world bounding box centre
+    #   Z   = target min Z + 0.340 m (first rung height) — same for all ladder slots
+    target_obj = bpy.context.scene.dgm_target_object
+    if target_obj is not None:
+        world_corners = [target_obj.matrix_world @ mathutils.Vector(c)
+                         for c in target_obj.bound_box]
+        target_cx    = sum(c.x for c in world_corners) / 8.0
+        target_cy    = sum(c.y for c in world_corners) / 8.0
+        target_min_z = min(c.z for c in world_corners)
+    else:
+        target_cx, target_cy, target_min_z = 0.0, 0.0, 0.0
+
+    # Normalise asset to Z=0 then shift up to first-rung height.
+    # No per-index Z offset — all ladder slots spawn at the same height.
+    asset_min_z  = min(co[2] for co in verts) if verts else 0.0
+    z_base       = target_min_z + 0.340 - asset_min_z
+
+    spawn_offset = mathutils.Vector((target_cx, target_cy, z_base))
 
     base = len(mem.data.vertices)
     mem.data.vertices.add(len(verts))
     for i, co in enumerate(verts):
-        mem.data.vertices[base + i].co = mathutils.Vector(co) + z_offset
+        mem.data.vertices[base + i].co = mathutils.Vector(co) + spawn_offset
     mem.data.update()
 
     # The P3D always uses 'ladder1' prefix — remap to the requested index
@@ -918,15 +1091,32 @@ def create_view_geometry_ladder(ladder_idx=1):
         return None
 
     if obj is not None:
-        # Offset Z to match memory point placement
-        obj.location.z += (ladder_idx - 1) * 4.0
+        # Align view geometry:
+        #   X/Y = target world bounding box centre
+        #   Z   = target min Z (no first-rung offset, no per-index offset)
+        import mathutils
+        target_obj = bpy.context.scene.dgm_target_object
+        if target_obj is not None:
+            world_corners = [target_obj.matrix_world @ mathutils.Vector(c)
+                             for c in target_obj.bound_box]
+            target_cx    = sum(c.x for c in world_corners) / 8.0
+            target_cy    = sum(c.y for c in world_corners) / 8.0
+            target_min_z = min(c.z for c in world_corners)
+        else:
+            target_cx, target_cy, target_min_z = 0.0, 0.0, 0.0
+        obj.location.x = target_cx
+        obj.location.y = target_cy
+        obj.location.z = target_min_z
 
-        # Rename the 'ladder1' selection to match the requested index.
-        # 'Component01' is left untouched — only the ladder selection is remapped.
-        if ladder_idx != 1:
-            vg = obj.vertex_groups.get("ladder1")
-            if vg:
-                vg.name = "ladder{}".format(ladder_idx)
+        # Rename vertex groups to match the requested ladder index.
+        # P3D asset always uses 'ladder1' and 'Component01' — remap both.
+        vg_ladder = obj.vertex_groups.get("ladder1")
+        if vg_ladder:
+            vg_ladder.name = "ladder{}".format(ladder_idx)
+
+        vg_comp = obj.vertex_groups.get("Component01")
+        if vg_comp:
+            vg_comp.name = "Component{:02d}".format(ladder_idx)
 
     return obj
 
@@ -1045,11 +1235,13 @@ def create_lod_meshes():
 
         ensure_object_mode()
 
-        # Remove any existing LOD with this index so we don't get duplicates
-        existing_name = "LOD{}".format(lod_num)
+        # Name includes the source object name so multiple objects can each have
+        # their own LOD set without overwriting each other.
+        existing_name = "{}.LOD{}".format(original_obj.name, lod_num)
+
+        # Remove any existing LOD with this exact name (regenerate)
         if existing_name in bpy.data.objects:
-            old = bpy.data.objects[existing_name]
-            bpy.data.objects.remove(old, do_unlink=True)
+            bpy.data.objects.remove(bpy.data.objects[existing_name], do_unlink=True)
 
         lod_obj = original_obj.copy()
         lod_obj.data = original_obj.data.copy()

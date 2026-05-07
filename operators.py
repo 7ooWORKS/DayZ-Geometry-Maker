@@ -4,7 +4,7 @@ DayZ Geometry Maker - Operators and Panel
 
 import bpy
 import math
-from . import geometry, updater, baker_bridge
+from . import geometry, updater, baker_bridge, ladder_generator
 
 
 # ---------------------------------------------------------------------------
@@ -739,6 +739,7 @@ class DGM_PT_object_props(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "DayZ"
+    bl_order = 0
     bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
@@ -1107,12 +1108,27 @@ def _draw_named_selections_content(layout, context):
 # Main Panel
 # ---------------------------------------------------------------------------
 
+
+
+class DGM_PT_generators(bpy.types.Panel):
+    bl_label = "DayZ Object Generator"
+    bl_idname = "DGM_PT_generators"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "DayZ"
+    bl_order = 10
+
+    def draw(self, context):
+        layout = self.layout
+        ladder_generator.draw_ladder_generator_section(layout, context)
+
 class DGM_PT_main_panel(bpy.types.Panel):
     bl_label = "DayZ Geometry Maker"
     bl_idname = "DGM_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "DayZ"
+    bl_order = 20
 
     def draw(self, context):
         layout = self.layout
@@ -1155,6 +1171,7 @@ class DGM_PT_main_panel(bpy.types.Panel):
             col.operator("dgm.create_view_geometry",           text="View Geometry (6e15)")
             col.operator("dgm.create_fire_geometry",           text="Fire Geometry (7e15)")
             box.operator("dgm.create_shadow_volumes",          text="Shadow Volumes (1e4 + 1.001e4)")
+
 
         # ---- Interior Views ----
         box, is_open = _section_header("dgm_show_interior", "Interior View LODs")
@@ -1256,14 +1273,12 @@ class DGM_PT_main_panel(bpy.types.Panel):
             sub = box.box()
             sub.label(text="Building & Structure", icon='MOD_BUILD')
 
-            # Ladders — up to 3, each independently addable with rotate button
-            ladder_count = scene.dgm_memory_ladders_count
-            ladder_hrow = sub.row(align=True)
-            ladder_hrow.label(text="", icon='KEYFRAME')
-            ladder_hrow.label(text="Ladders")
-            ladder_hrow.prop(scene, "dgm_memory_ladders_count", text="")
+            # Ladders — always show all 3 slots
+            sub_hrow = sub.row(align=True)
+            sub_hrow.label(text="", icon='KEYFRAME')
+            sub_hrow.label(text="Ladders")
 
-            for li in range(1, ladder_count + 1):
+            for li in range(1, 4):
                 prefix = "ladder{}".format(li)
                 lad_points = [
                     prefix,
@@ -1474,6 +1489,7 @@ def register_scene_props():
 
     # Collapsible section toggles — all closed by default
     S.dgm_show_selections  = bpy.props.BoolProperty(default=False)
+    S.dgm_show_generators  = bpy.props.BoolProperty(default=False)
     S.dgm_show_collision   = bpy.props.BoolProperty(default=False)
     S.dgm_show_interior    = bpy.props.BoolProperty(default=False)
     S.dgm_show_terrain     = bpy.props.BoolProperty(default=False)
@@ -1565,7 +1581,7 @@ def unregister_scene_props():
     props = [
         "dgm_target_object",
         "dgm_pending_selection",
-        "dgm_show_selections", "dgm_show_collision", "dgm_show_interior", "dgm_show_terrain",
+        "dgm_show_selections", "dgm_show_generators", "dgm_show_collision", "dgm_show_interior", "dgm_show_terrain",
         "dgm_show_memory", "dgm_show_lods", "dgm_show_export", "dgm_cta_baking_open",
         "dgm_fire_quality",
         "dgm_memory_doors_count", "dgm_memory_lights_count", "dgm_memory_ladders_count",
@@ -1691,17 +1707,26 @@ class DGM_OT_memory_rotate_ladder(bpy.types.Operator):
             self.report({'WARNING'}, "No ladder{} points found".format(self.ladder_idx))
             return {'CANCELLED'}
 
+        # Compute the centre (X, Y) of the ladder's own vertices — rotate around that,
+        # not around world origin.
+        coords = [mem.data.vertices[vi].co.copy() for vi in verts_to_rotate]
+        cx = sum(c.x for c in coords) / len(coords)
+        cy = sum(c.y for c in coords) / len(coords)
+        pivot = mathutils.Vector((cx, cy, 0.0))
+
         for vi in verts_to_rotate:
-            mem.data.vertices[vi].co = rot @ mem.data.vertices[vi].co
+            co = mem.data.vertices[vi].co.copy()
+            co -= pivot          # translate to pivot
+            co  = rot @ co       # rotate around Z
+            co += pivot          # translate back
+            mem.data.vertices[vi].co = co
 
         mem.data.update()
 
-        # Also rotate the View Geometry object for this ladder slot
+        # Rotate the View Geometry object around its own location (already correct)
         vg_obj_name = "View Geometry.ladder{}".format(self.ladder_idx)
         vg_obj = bpy.data.objects.get(vg_obj_name)
         if vg_obj:
-            import mathutils
-            # Rotate around Z at the object's current location
             vg_obj.rotation_euler.z += math.radians(90)
 
         self.report({'INFO'}, "Ladder {} rotated 90°".format(self.ladder_idx))
@@ -1750,6 +1775,7 @@ operator_classes = (
     DGM_OT_memory_delete_ladder,
     DGM_OT_memory_rotate_ladder,
     DGM_PT_object_props,
+    DGM_PT_generators,
     DGM_PT_main_panel,
 )
 
@@ -1757,10 +1783,12 @@ operator_classes = (
 def register():
     for cls in operator_classes:
         bpy.utils.register_class(cls)
+    ladder_generator.register()
     register_scene_props()
 
 
 def unregister():
     unregister_scene_props()
+    ladder_generator.unregister()
     for cls in reversed(operator_classes):
         bpy.utils.unregister_class(cls)
