@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+- **Model Generator panel** — new standalone *DayZ Object Generator* panel in the N-panel, positioned between *DayZ Object Properties* and *DayZ Geometry Maker*. Designed to hold procedural model generators; more will be added over time.
+- **Ladder Generator** — procedural DayZ ladder generator inside the Model Generator panel.
+  - One-click **Add Ladder** button; all dimensions correct for DayZ climbing animations by default (320 mm rung spacing, 340 mm first rung, 42 mm tube diameter, 440 / 480 mm width).
+  - Live viewport preview — every parameter rebuilds the mesh instantly via `check()` callback.
+  - Adjustable: rung count, width (440 / 480 mm), top extension, tube segments. All values editable with checkmark / warning icon showing deviation from DayZ standard.
+  - Maximum 3 ladders per scene enforced in the UI (DayZ engine limit), with live counter.
+  - **Edit Selected Ladder** — re-opens the parameter dialog for any selected ladder. Cancel correctly restores the previous mesh.
+  - **Geometry integrity check** — panel detects manual edits, scale changes and Apply Scale by comparing actual bounding box dimensions against the stored expected values. Shows a red warning with actual vs expected measurements.
+  - **Restore Ladder** — one-click rebuild from stored parameters, preserving world position and rotation.
+  - **Generate Collision** — adds two stringer box components (left + right rail) into the shared Geometry LOD object. Components are tracked per ladder via a JSON map; regenerating removes only that ladder's old components. Button is disabled once collision exists and re-enables if components are manually deleted.
+  - **Memory points and View Geometry** — placed at the correct world position based on the Target Object bounding box. Memory points use fixed semantic offsets from the first and last rung (not scaling), so `ladder1_top_front` always sits exactly on the last rung regardless of rung count.
+  - View Geometry scaled to match actual ladder total height.
+  - Component and ladder named selections correctly numbered: Ladder 1 → Component01 + ladder1, Ladder 2 → Component02 + ladder2, Ladder 3 → Component03 + ladder3.
+  - Generated objects named **DZ_Ladder_1 / 2 / 3**.
+
 ---
 
 ## [2.0.6] - 2026-05-01
