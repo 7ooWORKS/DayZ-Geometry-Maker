@@ -960,17 +960,50 @@ def add_memory_ladder(ladder_idx=1):
     else:
         target_cx, target_cy, target_min_z = 0.0, 0.0, 0.0
 
-    # Normalise asset to Z=0 then shift up to first-rung height.
-    # No per-index Z offset — all ladder slots spawn at the same height.
-    asset_min_z  = min(co[2] for co in verts) if verts else 0.0
-    z_base       = target_min_z + 0.340 - asset_min_z
+    # Place memory points at fixed offsets from first_rung and last_rung.
+    # NO scaling — each point has a fixed semantic position:
+    #
+    #  P3D vert offsets (measured from asset, Y=up in P3D = Z in Blender):
+    #    vert[0]: first_rung_z - 0.021  (dir point near ground)
+    #    vert[1]: first_rung_z + 0.000  (bottom_front — exactly first rung)
+    #    vert[2]: first_rung_z + 0.912  (con — interaction start)
+    #    vert[3]: last_rung_z  + 0.306  (ladder1 top — above last rung)
+    #    vert[4]: last_rung_z  + 0.000  (top_front — exactly last rung)
+    #    vert[5]: last_rung_z  + 0.004  (con_dir top)
+    #
+    # X and Z (depth) offsets from the P3D are kept as-is.
 
-    spawn_offset = mathutils.Vector((target_cx, target_cy, z_base))
+    # Get actual ladder dimensions from target object
+    target_ladder = bpy.context.scene.dgm_target_object
+    if target_ladder is not None and target_ladder.get('dgm_ladder'):
+        rung_count    = int(target_ladder.get('dgm_ladder_rungs',   15))
+        rung_spacing  = float(target_ladder.get('dgm_p_rung_spacing',  0.320))
+        ground_offset = float(target_ladder.get('dgm_p_ground_offset', 0.340))
+    else:
+        rung_count, rung_spacing, ground_offset = 15, 0.320, 0.340
+
+    actual_first_rung = ground_offset
+    actual_last_rung  = ground_offset + (rung_count - 1) * rung_spacing
+
+    # Fixed Z offsets per vertex index (from P3D asset analysis)
+    VERT_Z_OFFSETS = [
+        actual_first_rung - 0.021,   # 0
+        actual_first_rung + 0.000,   # 1
+        actual_first_rung + 0.912,   # 2
+        actual_last_rung  + 0.306,   # 3
+        actual_last_rung  + 0.000,   # 4
+        actual_last_rung  + 0.004,   # 5
+    ]
 
     base = len(mem.data.vertices)
     mem.data.vertices.add(len(verts))
     for i, co in enumerate(verts):
-        mem.data.vertices[base + i].co = mathutils.Vector(co) + spawn_offset
+        z = target_min_z + VERT_Z_OFFSETS[i] if i < len(VERT_Z_OFFSETS)             else target_min_z + actual_last_rung
+        mem.data.vertices[base + i].co = mathutils.Vector((
+            co[0] + target_cx,
+            co[1] + target_cy,
+            z,
+        ))
     mem.data.update()
 
     # The P3D always uses 'ladder1' prefix — remap to the requested index
@@ -1104,6 +1137,22 @@ def create_view_geometry_ladder(ladder_idx=1):
             target_min_z = min(c.z for c in world_corners)
         else:
             target_cx, target_cy, target_min_z = 0.0, 0.0, 0.0
+        # Scale view geometry Z to match actual last_rung_z.
+        # Asset view geometry height = 5.584 m (= 15 rungs * 0.320 + 0.340 + 0.700 - 0.320)
+        # We scale so the top of the view geometry aligns with actual total_height.
+        ASSET_VG_HEIGHT = 5.584   # view geometry P3D total height (Y range)
+        if target_obj is not None and target_obj.get('dgm_ladder'):
+            rung_count2    = int(target_obj.get('dgm_ladder_rungs',   15))
+            rung_spacing2  = float(target_obj.get('dgm_p_rung_spacing',  0.320))
+            ground_offset2 = float(target_obj.get('dgm_p_ground_offset', 0.340))
+            top_ext2       = float(target_obj.get('dgm_p_top_extension', 0.700))
+            actual_height  = ground_offset2 + (rung_count2 - 1) * rung_spacing2 + top_ext2
+        else:
+            actual_height = ASSET_VG_HEIGHT
+        vg_scale = actual_height / ASSET_VG_HEIGHT if ASSET_VG_HEIGHT > 0 else 1.0
+        obj.scale = (1.0, 1.0, vg_scale)
+        bpy.ops.object.transform_apply(scale=True)
+
         obj.location.x = target_cx
         obj.location.y = target_cy
         obj.location.z = target_min_z

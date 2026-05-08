@@ -152,11 +152,8 @@ def _is_active_ladder(obj):
 
 class DGM_OT_ladder_type1(bpy.types.Operator):
     bl_idname      = "dgm.ladder_type1"
-    bl_label       = "Create Type 1"
-    bl_description = (
-        "Generate a new straight DayZ ladder (Type 1). "
-        "Every parameter change rebuilds the mesh live in the viewport."
-    )
+    bl_label       = "Add Ladder"
+    bl_description = "DayZ ladder with correct animation dimensions (440/480 mm wide, 320 mm rung spacing, 42 mm tube diameter)."
     bl_options = {'REGISTER', 'UNDO'}
 
     width: bpy.props.FloatProperty(
@@ -251,10 +248,16 @@ class DGM_OT_ladder_type1(bpy.types.Operator):
         obj['dgm_ladder_rungs']            = rung_count
         obj['dgm_ladder_height']           = round(total_height, 4)
         obj['dgm_ladder_expected_height']  = round(total_height, 4)
-        # Expected width = stringer c-t-c + one full tube diameter (both sides)
         obj['dgm_ladder_expected_width']   = round(params['width'] + params['tube_diameter'], 4)
-        # Expected depth = one tube diameter (stringers are round tubes)
         obj['dgm_ladder_expected_depth']   = round(params['tube_diameter'], 4)
+        # Always persist params so panel integrity check works from first creation
+        obj['dgm_p_width']         = params['width']
+        obj['dgm_p_tube_diameter'] = params['tube_diameter']
+        obj['dgm_p_rung_count']    = params['rung_count']
+        obj['dgm_p_rung_spacing']  = params['rung_spacing']
+        obj['dgm_p_ground_offset'] = params['ground_offset']
+        obj['dgm_p_top_extension'] = params['top_extension']
+        obj['dgm_p_resolution']    = params['resolution']
 
     @classmethod
     def poll(cls, context):
@@ -262,8 +265,11 @@ class DGM_OT_ladder_type1(bpy.types.Operator):
 
     def invoke(self, context, event):
         # Always create a brand new ladder object — never reuse existing
-        mesh = bpy.data.meshes.new("DZ_Ladder_T1")
-        obj  = bpy.data.objects.new("DZ_Ladder_T1", mesh)
+        # Name based on how many ladders already exist (1, 2, 3)
+        ladder_num = _count_scene_ladders() + 1
+        obj_name = "DZ_Ladder_{}".format(ladder_num)
+        mesh = bpy.data.meshes.new(obj_name)
+        obj  = bpy.data.objects.new(obj_name, mesh)
         bpy.context.collection.objects.link(obj)
         bpy.context.view_layer.objects.active = obj
         for o in bpy.context.selected_objects:
@@ -283,7 +289,7 @@ class DGM_OT_ladder_type1(bpy.types.Operator):
         params = self._get_params()
 
         box = layout.box()
-        box.label(text="Type 1 — Straight Ladder", icon='MESH_CYLINDER')
+        box.label(text="Straight Ladder", icon='MESH_CYLINDER')
 
         col = box.column(align=True)
 
@@ -419,15 +425,19 @@ class DGM_OT_ladder_edit(bpy.types.Operator):
     def _rebuild(self, context, commit=False):
         """
         Rebuild the ladder mesh from current properties.
-        commit=False  : live preview only — mesh is updated but expected_* and
-                        dgm_p_* are NOT written (so cancel can restore them).
+        Dispatches to the correct builder based on dgm_ladder_type.
+        commit=False  : live preview only — no expected_* or dgm_p_* written.
         commit=True   : final save — write all properties to object.
         """
         obj = context.active_object
         if obj is None or obj.type != 'MESH' or not obj.get('dgm_ladder'):
             return
         params = self._get_params()
-        bm, rung_count, total_height = build_ladder_type1(params)
+        ladder_type = obj.get('dgm_ladder_type', 1)
+        if ladder_type == 2:
+            bm, rung_count, total_height = build_ladder_type2(params)
+        else:
+            bm, rung_count, total_height = build_ladder_type1(params)
         bm.to_mesh(obj.data)
         bm.free()
         obj.data.update()
@@ -444,8 +454,13 @@ class DGM_OT_ladder_edit(bpy.types.Operator):
             obj['dgm_p_rung_count']    = self.rung_count
             obj['dgm_p_rung_spacing']  = self.rung_spacing
             obj['dgm_p_ground_offset'] = self.ground_offset
-            obj['dgm_p_top_extension'] = self.top_extension
-            obj['dgm_p_resolution']    = self.resolution
+            obj['dgm_p_top_extension']  = self.top_extension
+            obj['dgm_p_resolution']     = self.resolution
+            obj['dgm_p_cage_depth']     = self.cage_depth
+            obj['dgm_p_cage_bar_count'] = self.cage_bar_count
+            obj['dgm_p_hoop_spacing']   = self.hoop_spacing
+            obj['dgm_p_cage_start_z']   = self.cage_start_z
+            obj['dgm_p_cage_tube_d']    = self.cage_tube_d
 
     def _snapshot(self, obj):
         """Take a bmesh snapshot of the current mesh and ALL properties for cancel restoration."""
@@ -506,6 +521,12 @@ class DGM_OT_ladder_edit(bpy.types.Operator):
         self.resolution     = obj.get('dgm_p_resolution',    10)
         stored_rungs = obj.get('dgm_p_rung_count', None)
         self.rung_count = stored_rungs if stored_rungs is not None                           else obj.get('dgm_ladder_rungs', 16)
+        # Load cage params if editing a Type 2
+        self.cage_depth      = obj.get('dgm_p_cage_depth',     0.700)
+        self.cage_bar_count  = obj.get('dgm_p_cage_bar_count', 4)
+        self.hoop_spacing    = obj.get('dgm_p_hoop_spacing',   0.900)
+        self.cage_start_z    = obj.get('dgm_p_cage_start_z',   2.500)
+        self.cage_tube_d     = obj.get('dgm_p_cage_tube_d',    0.025)
         # Take snapshot BEFORE opening dialog so cancel can restore
         self._snapshot(obj)
         # Do NOT call _rebuild here — mesh stays untouched until user edits something
@@ -560,6 +581,20 @@ class DGM_OT_ladder_edit(bpy.types.Operator):
         icol.label(text="Total height:  {:.3f} m".format(total_height))
         icol.label(text="Last rung at:  {:.3f} m".format(last_rung_z))
         icol.label(text="Width:  {:.0f} mm".format(params['width'] * 1000))
+
+        # Show cage controls when editing Type 2
+        obj = context.active_object
+        if obj and obj.get('dgm_ladder_type') == 2:
+            cage_box = layout.box()
+            cage_box.label(text="Cage Settings", icon='MESH_CIRCLE')
+            ccol = cage_box.column(align=True)
+            ccol.prop(self, 'cage_depth')
+            ccol.prop(self, 'cage_tube_d')
+            ccol.separator()
+            ccol.prop(self, 'hoop_spacing')
+            ccol.prop(self, 'cage_bar_count')
+            ccol.separator()
+            ccol.prop(self, 'cage_start_z')
 
         q_row = layout.row(align=True)
         q_row.label(text="Tube Segments:", icon='MESH_CIRCLE')
@@ -697,21 +732,16 @@ def draw_ladder_generator_section(layout, context):
     box = layout.box()
     box.label(text="Ladder Generator", icon='MESH_CYLINDER')
 
-    # Create buttons row — always visible
+    # Add Ladder button + counter
     ladder_count = _count_scene_ladders()
     count_row = box.row(align=True)
     count_row.label(text="Ladders in scene: {}/3".format(ladder_count),
                     icon='CHECKMARK' if ladder_count < 3 else 'ERROR')
 
-    row = box.row(align=True)
-    row.enabled = ladder_count < 3
-    row.operator("dgm.ladder_type1", text="+ Type 1")
-    sub2 = row.row(align=True)
-    sub2.enabled = False
-    sub2.operator("dgm.ladder_type1", text="+ Type 2")
-    sub3 = row.row(align=True)
-    sub3.enabled = False
-    sub3.operator("dgm.ladder_type1", text="+ Type 3")
+    add_row = box.row(align=True)
+    add_row.enabled = ladder_count < 3
+    add_row.scale_y = 1.3
+    add_row.operator("dgm.ladder_type1", text="Add Ladder", icon='ADD')
 
     # Selected ladder info + Edit button — only when a ladder is selected
     if is_ladder:
@@ -730,8 +760,7 @@ def draw_ladder_generator_section(layout, context):
         status_icon = 'CHECKMARK' if all_std else 'ERROR'
         icol = box.column(align=True)
         icol.label(
-            text="{}  |  Type {}  |  {} rungs  |  {} m".format(
-                obj.name, ladder_type, rungs, height),
+            text="{}  |  {} rungs  |  {} m".format(obj.name, rungs, height),
             icon=status_icon)
 
         box.operator("dgm.ladder_edit", text="Edit Selected Ladder", icon='PREFERENCES')
@@ -806,6 +835,8 @@ def draw_ladder_generator_section(layout, context):
                 wcol.operator("dgm.ladder_restore", text="Restore Ladder", icon='FILE_REFRESH')
 
 
+
+
 # ---------------------------------------------------------------------------
 #  Registration
 # ---------------------------------------------------------------------------
@@ -830,3 +861,7 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+
+# ---------------------------------------------------------------------------
+#  Registration
+# ---------------------------------------------------------------------------
